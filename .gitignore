@@ -1,0 +1,286 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# pdm
+.pdm.toml
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# Kiro IDE
+.kiro/
+
+# Machine Learning / Deep Learning
+# 模型文件
+*.pth
+*.pt
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.ckpt
+*.pb
+*.onnx
+*.tflite
+
+# 数据文件 (大文件)
+*.csv
+*.tsv
+*.json
+*.jsonl
+*.parquet
+*.feather
+*.arrow
+
+# 但保留配置和样本文件
+!configs/*.yaml
+!configs/*.yml
+!configs/*.json
+!**/sample.json
+!**/README.md
+
+# 处理后的数据
+processed_data/
+*.npy
+*.npz
+
+# 实验结果
+results/
+logs/
+runs/
+wandb/
+mlruns/
+.neptune/
+
+# 检查点和模型
+checkpoints/
+models/
+saved_models/
+
+# 图片和可视化
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.pdf
+*.eps
+
+# 但保留文档中的图片
+!docs/**/*.png
+!docs/**/*.jpg
+!README_images/
+
+# Tensorboard
+events.out.tfevents.*
+
+# Weights & Biases
+wandb/
+
+# MLflow
+mlruns/
+
+# DVC
+.dvc/
+*.dvc
+
+# 临时文件
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows
+*.lnk
+
+# 项目特定
+# 原始数据集文件（太大）
+dataset/Twibot-20/node.json
+dataset/Twibot-20/edge.json
+dataset/Misbot/node.json
+dataset/Misbot/edge.json
+
+# 但保留小文件和文档
+!dataset/**/sample.json
+!dataset/**/README.md
+!dataset/README.md
+
+# 预处理输出
+processed_data/
+*.pt
+*.pth
+
+# 实验脚本输出
+experiments/output/
+experiments/logs/
+
+# 配置文件中的敏感信息
+**/config_local.yaml
+**/secrets.yaml
+**/.env.local
+
+# IDE 和编辑器
+*.sublime-project
+*.sublime-workspace
+.vscode/settings.json
+.vscode/launch.json
+.vscode/extensions.json
+
+# 测试覆盖率
+.coverage
+htmlcov/
+
+# 文档构建
+docs/_build/
+docs/build/
+
+# 备份文件
+*.bak
+*.backup
+*.old
+
+# 压缩文件
+*.zip
+*.tar.gz
+*.rar
+*.7z
