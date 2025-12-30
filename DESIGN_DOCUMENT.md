@@ -90,75 +90,9 @@ cross_platform_adaptation = {
 ```
 
 ### 统一数据接口
-```python
-@dataclass
-class PlatformData:
-    """跨平台数据的统一接口（融合设计）"""
-    
-    # 必须字段
-    user_ids: List[str]                    # 用户唯一标识
-    user_texts: List[str]                  # 用户文本内容
-    labels: Dict[str, int]                 # 用户标签 (0=human, 1=bot)
-    
-    # 可选字段（缺失时模型自动处理）
-    numerical_features: Optional[np.ndarray] = None    # 5维数值特征（统一）
-    graph_edges: Optional[List[Tuple]] = None          # 图边关系
-    categorical_features: Optional[np.ndarray] = None  # 3维分类特征（统一）
-    
-    # 元信息
-    platform_name: str = ""               # 平台标识
-    language: str = ""                     # 主要语言
-    feature_description: Dict = None       # 特征描述
-```
+
 
 ### 统一预处理器设计
-```python
-class UnifiedPreprocessor:
-    """统一预处理器 - 融合Twibot经验与跨平台设计"""
-    
-    def __init__(self, config):
-        # 多语言文本编码器（跨平台创新）
-        self.text_encoder = pipeline(
-            'feature-extraction',
-            model='xlm-roberta-base',  # 支持中英文
-            tokenizer='xlm-roberta-base'
-        )
-        
-    def process_twibot20(self) -> PlatformData:
-        """处理Twibot-20（借鉴原作者经验）"""
-        # 1. 5维数值特征（完全借鉴）
-        numerical_features = self._extract_numerical_features_twibot(user_data)
-        # [followers_count, following_count, listed_count, username_length, account_age_days]
-        
-        # 2. 3维分类特征（借鉴+简化）
-        categorical_features = self._extract_categorical_features_twibot(user_data)
-        # [is_verified, is_protected, has_default_avatar]
-        
-        # 3. 文本聚合（借鉴方法）
-        user_texts = self._extract_text_features_twibot(user_data, tweet_data, edge_data)
-        # description + aggregated_tweets (max 20条)
-        
-        # 4. 图结构（借鉴边处理逻辑）
-        graph_edges = self._extract_graph_features_twibot(edge_data, user_data)
-        # 分离post关系，保留friend/follow关系
-        
-    def process_misbot(self) -> PlatformData:
-        """处理Misbot（适配到统一格式）"""
-        # 1. 适配数值特征到5维
-        numerical_features = self._adapt_misbot_numerical_to_5dim(user_data)
-        # [numerical[0], numerical[1], numerical[2], username_length, fixed_age]
-        
-        # 2. 适配分类特征到3维
-        categorical_features = self._adapt_misbot_categorical_to_3dim(user_data)
-        # [is_verified, is_vip, has_avatar] (从20维categorical推断)
-        
-        # 3. 文本处理（相同策略）
-        user_texts = self._extract_text_features_misbot(user_data, tweet_data, edge_data)
-        # description + aggregated_posts (max 20条)
-        
-        # 4. 图结构（相同处理逻辑）
-        graph_edges = self._extract_graph_features_misbot(edge_data, user_data)
-```
 
 ### 关键技术融合点
 
@@ -178,19 +112,6 @@ def standardize_features(features_array):
 ```
 
 #### **2. 文本聚合策略（借鉴+改进）**
-```python
-# 借鉴Twibot的20条推文限制，改进为多语言支持
-def aggregate_user_texts(user_description, user_tweets, max_tweets=20):
-    # 用户描述
-    combined_text = user_description or ""
-    
-    # 聚合推文（借鉴原作者限制）
-    if user_tweets:
-        tweet_texts = user_tweets[:max_tweets]  # 最多20条
-        combined_text += " " + " ".join(tweet_texts)
-    
-    return combined_text.strip()
-```
 
 #### **3. 图结构处理（借鉴逻辑）**
 ```python
@@ -771,10 +692,10 @@ CPPNBOT/
 ## 🎯 实施计划
 
 ### 第1-2周：数据预处理（融合策略实施）
-- [x] 统一预处理器实现（`src/data/unified_preprocessor.py`）
-- [x] 配置文件设计（`configs/preprocessing_config.yaml`）
-- [x] 预处理脚本（`run_preprocessing.py`）
-- [x] 灵活数据加载器（`src/data/flexible_loader.py`）
+- [ ] 统一预处理器实现
+- [ ] 配置文件设计
+- [ ] 预处理脚本
+- [ ] 灵活数据加载器
 - [ ] 运行预处理，生成统一格式数据
 - [ ] 验证数据完整性和特征对齐
 
