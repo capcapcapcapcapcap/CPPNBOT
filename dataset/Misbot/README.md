@@ -41,13 +41,15 @@ dataset/Misbot/
 #### 1. 用户节点 (User Node)
 ```json
 {
-  "ID": "train_u0000001",
-  "type": "user",
-  "profile": {
-    "description": "请别关注我",
-    "numerical": [27, 384, 3797],
-    "categorical": [0,1,0,1,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0]
-  }
+  "train_u0000001": {
+        "ID": "train_u0000001",
+        "type": "user",
+        "profile": {
+          "description": "请别关注我",
+          "numerical": [27, 384, 3797],
+          "categorical": [0,1,0,1,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0]
+        }
+      }
 }
 ```
 
@@ -61,10 +63,12 @@ dataset/Misbot/
 #### 2. 微博节点 (Tweet Node)
 ```json
 {
-  "ID": "t_train_u0000001_5",
-  "type": "tweet", 
-  "content": "连夜拉走",
-  "author": "train_u0000001"
+  "t_train_u0000001_0": {
+        "ID": "t_train_u0000001_0",
+        "type": "tweet",
+        "content": "连夜拉走",
+        "author": "train_u0000001"
+      }
 }
 ```
 

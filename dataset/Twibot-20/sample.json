@@ -1,31 +1,22 @@
 {
-  "user_nodes": [
-    {
-      "id": "u17461978",
-      "data": {
+  "_说明": "Twibot-20数据集样本 - 展示真实数据结构",
+  
+  "node.json格式": {
+    "_描述": "字典格式，key为节点ID，value为节点属性",
+    "_用户节点": "ID以'u'开头",
+    "_推文节点": "ID以't'开头",
+    
+    "用户节点示例": {
+      "u17461978": {
         "created_at": "Tue Nov 18 10:27:25 +0000 2008",
         "description": "VERY QUOTATIOUS, I PERFORM RANDOM ACTS OF SHAQNESS",
-        "entities": {
-          "url": {
-            "urls": [
-              {
-                "url": "https://t.co/7hsiK8cCKW",
-                "expanded_url": "http://www.ShaqFuRadio.com",
-                "display_url": "ShaqFuRadio.com",
-                "indices": [0, 23]
-              }
-            ]
-          },
-          "description": {
-            "urls": []
-          }
-        },
+        "entities": "{'url': {'urls': [...]}, 'description': {'urls': []}}",
         "id": "u17461978",
         "location": "Orlando, FL",
         "name": "SHAQ",
         "pinned_tweet_id": null,
         "profile_image_url": "http://pbs.twimg.com/profile_images/1673907275/image_normal.jpg",
-        "protected": false,
+        "protected": "False",
         "public_metrics": {
           "followers_count": 15349596,
           "following_count": 692,
@@ -34,137 +25,55 @@
         },
         "url": "https://t.co/7hsiK8cCKW",
         "username": "SHAQ",
-        "verified": true,
+        "verified": "True",
         "withheld": null
       }
     },
-    {
-      "id": "u1297437077403885568",
-      "data": {
-        "created_at": "Sun Aug 23 07:35:11 +0000 2020",
-        "description": "",
-        "entities": {
-          "description": {
-            "urls": []
-          }
-        },
-        "id": "u1297437077403885568",
-        "location": "",
-        "name": "Jennifer Fishpaw",
-        "pinned_tweet_id": null,
-        "profile_image_url": "http://pbs.twimg.com/profile_images/1297437406979735552/XIyZnMae_normal.jpg",
-        "protected": false,
-        "public_metrics": {
-          "followers_count": 0,
-          "following_count": 44,
-          "tweet_count": 0,
-          "listed_count": 0
-        },
-        "url": null,
-        "username": "JenniferFishpaw",
-        "verified": false,
-        "withheld": null
-      }
-    },
-    {
-      "id": "u34743251",
-      "data": {
-        "created_at": "Thu Apr 23 21:53:30 +0000 2009",
-        "description": "SpaceX designs, manufactures and launches the world's most advanced rockets and spacecraft",
-        "entities": {
-          "url": {
-            "urls": [
-              {
-                "url": "https://t.co/SDnmlLwwoK",
-                "expanded_url": "http://www.spacex.com",
-                "display_url": "spacex.com",
-                "indices": [0, 23]
-              }
-            ]
-          },
-          "description": {
-            "urls": []
-          }
-        },
-        "id": "u34743251",
-        "location": "Hawthorne, CA",
-        "name": "SpaceX",
-        "pinned_tweet_id": null,
-        "profile_image_url": "http://pbs.twimg.com/profile_images/1082744382585856001/rH_k3PtQ_normal.jpg",
-        "protected": false,
-        "public_metrics": {
-          "followers_count": 12601567,
-          "following_count": 96,
-          "tweet_count": 4879,
-          "listed_count": 26952
-        },
-        "url": "https://t.co/SDnmlLwwoK",
-        "username": "SpaceX",
-        "verified": true,
-        "withheld": null
-      }
-    }
-  ],
-  "tweet_nodes": [
-    {
-      "id": "t0",
-      "data": {
+    
+    "推文节点示例": {
+      "t0": {
         "id": "t0",
-        "text": "RT @CarnivalCruise: 🎉 Are you ready to see what our newest ship's name will be? 🎉 Thanks to all our partners for helping us unbox the name.…"
-      }
-    },
-    {
-      "id": "t1",
-      "data": {
-        "id": "t1",
-        "text": "Who has time for receipts? Not me. @epson receipt scanners make it easy. No mess = no stress! Check it out at https://t.co/ofqbTdz0Qk. https://t.co/BtYwuyz9N5"
-      }
-    },
-    {
-      "id": "t2",
-      "data": {
-        "id": "t2",
-        "text": "Steady wants to encourage you to invest in your financial future. Connect your bank account to @TheSteadyApp and have access to benefits like income insights, online medical visits, and cash grants of up to $1,000! Get started today by visiting https://t.co/5w3AvWd8Q0. #Sponsored https://t.co/ZHBfP5xDMg"
-      }
-    },
-    {
-      "id": "t3",
-      "data": {
-        "id": "t3",
-        "text": "Good one, @rishid. But let's see if y'all can do better than that. Come on, everybody. Show me your best #HandShaq! #ad https://t.co/xCloeLRfuM https://t.co/urVSOfTmT2"
-      }
-    },
-    {
-      "id": "t4",
-      "data": {
-        "id": "t4",
-        "text": "#lsunationalchamps"
+        "text": "RT @CarnivalCruise: Are you ready to see what our newest ship's name will be?"
       }
     }
-  ],
-  "statistics": {
-    "total_nodes": 33717772,
-    "user_nodes": 229580,
-    "tweet_nodes": 33488192,
-    "user_fields": [
-      "created_at",
-      "description", 
-      "entities",
-      "id",
-      "location",
-      "name",
-      "pinned_tweet_id",
-      "profile_image_url",
-      "protected",
-      "public_metrics",
-      "url",
-      "username",
-      "verified",
-      "withheld"
-    ],
-    "tweet_fields": [
-      "id",
-      "text"
-    ]
+  },
+  
+  "edge.json格式": {
+    "_描述": "字典格式，key为源节点ID，value为关系列表",
+    "_关系格式": "[关系类型, 目标节点ID]",
+    "_关系类型": ["post", "friend", "follow"],
+    
+    "示例": {
+      "source_id": [["relation", "target_id"]],
+      "u17461978": [
+        ["post", "t0"],
+        ["post", "t1"],
+        ["friend", "u23970102"],
+        ["follow", "u47293791"]
+      ]
+    }
+  },
+  
+  "label.json格式": {
+    "_描述": "字典格式，key为用户ID，value为标签",
+    "id": "label",
+    "u17461978": "human",
+    "u1297437077403885568": "bot"
+  },
+  
+  "split.json格式": {
+    "_描述": "字典格式，包含train/dev/test三个数组",
+    "train": ["u17461978", "u17685258"],
+    "dev": ["u1297437077403885568"],
+    "test": ["u15750898"]
+  },
+  
+  "统计信息": {
+    "用户节点数": 229580,
+    "推文节点数": 33488192,
+    "标注用户数": 11826,
+    "训练集": 8278,
+    "验证集": 2365,
+    "测试集": 1183
   }
 }

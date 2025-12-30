@@ -1,66 +1,47 @@
-# 社交机器人检测数据集集合
+# 数据集说明
 
-## 概述
+本项目使用两个社交机器人检测数据集：
 
-本目录包含两个主要的社交媒体机器人检测数据集，支持传统机器学习和图神经网络方法的研究。
+## Twibot-20 (英文Twitter)
 
-## 数据集对比
+| 文件 | 大小 | 说明 |
+|------|------|------|
+| node.json | 6.62 GB | 用户和推文节点 |
+| edge.json | 734 MB | 社交关系 |
+| label.json | 0.32 MB | 用户标签 |
+| split.json | 0.28 MB | 数据划分 |
 
-| 特性 | Misbot | Twibot-20 |
-|------|--------|-----------|
-| **语言** | 中文微博 | 英文Twitter |
-| **用户数** | 99,874 | 224,818 |
-| **标注用户** | 99,874 | 11,826 |
-| **推文数** | 2.4M | 33.5M |
-| **数据来源** | 微博平台 | Twitter API |
-| **图结构** | 支持 | 原生支持 |
-| **文件大小** | 401MB | 7.5GB |
+**统计**：229,580用户 + 33,488,192推文，11,826个标注用户
 
-## 数据集目录
+**格式**：
+- node.json: `{node_id: {属性...}, ...}` 字典格式
+- 用户ID以`u`开头，推文ID以`t`开头
+- 关系类型: post, friend, follow
 
-### 1.Misbot (中文微博数据集)
-```
-Misbot_Graph/
-├── node.json          # 节点数据 (451MB)
-├── edge.json          # 边关系 (73MB)
-├── label.json         # 标签数据 (2MB)
-├── split.json         # 数据划分 (2MB)
-├── sample.json        # 样本数据 (1MB)
-└── README.md          # 说明文档
-```
+## Misbot (中文微博)
 
-**特点**：
-- 异构图结构：用户节点 + 微博节点
-- 4种关系类型：post, mention, retweet, follow
-- 与Twibot-20格式完全兼容
-- 支持图神经网络建模
+| 文件 | 大小 | 说明 |
+|------|------|------|
+| node.json | 451 MB | 用户和推文节点 |
+| edge.json | 73 MB | 社交关系 |
+| label.json | 2.3 MB | 用户标签 |
+| split.json | 1.6 MB | 数据划分 |
 
-### 3. Twibot-20 (英文Twitter数据集)
-```
-Twibot-20/
-├── node.json          # 节点数据 (6.6GB)
-├── edge.json          # 边关系 (734MB)
-├── label.json         # 标签数据 (0.3MB)
-├── split.json         # 数据划分 (0.3MB)
-├── sample.json        # 样本数据 (3MB)
-└── README.md          # 说明文档
-```
+**统计**：99,874用户 + 2,427,195推文，全部用户已标注
 
-**特点**：
-- 大规模Twitter社交网络图
-- 真实API数据，38个用户属性
-- 3种关系类型：post, friend, follow
-- 支持大规模图神经网络研究
+**格式**：
+- node.json: `{node_id: {属性...}, ...}` 字典格式
+- 用户ID格式: `train_u{数字}`
+- 推文ID格式: `t_train_u{数字}_{序号}`
+- 关系类型: post, mention, retweet, follow
 
-## 格式兼容性
+## 数据结构对比
 
-两个图结构数据集采用相同的边格式：
-```json
-// 统一格式: [关系类型, 目标ID]
-["post", "t_xxx"]      // 发布关系
-["mention", "u_xxx"]   // 提及关系  
-["follow", "u_xxx"]    // 关注关系
-```
+| 特征 | Twibot-20 | Misbot |
+|------|-----------|--------|
+| 语言 | 英文 | 中文 |
+| 数值特征 | followers, following, listed, tweets | followers, following, tweets |
+| 分类特征 | verified, protected, default_avatar | 20维categorical |
+| 文本 | description + tweets | description + tweets |
 
-这使得可以使用相同的代码处理两个数据集。
-
+详细格式见各数据集目录下的 `sample.json`。
