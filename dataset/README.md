@@ -1,47 +1,136 @@
-# 数据集说明
+# dataset/ - 原始数据集目录
 
-本项目使用两个社交机器人检测数据集：
+本目录包含原始的社交机器人检测数据集。
 
-## Twibot-20 (英文Twitter)
+## 目录结构
 
-| 文件 | 大小 | 说明 |
-|------|------|------|
-| node.json | 6.62 GB | 用户和推文节点 |
-| edge.json | 734 MB | 社交关系 |
-| label.json | 0.32 MB | 用户标签 |
-| split.json | 0.28 MB | 数据划分 |
+```
+dataset/
+├── README.md
+├── Twibot-20/          # Twitter 机器人检测数据集
+│   ├── node.json       # 用户节点信息
+│   ├── edge.json       # 用户关系边
+│   ├── label.json      # 用户标签
+│   ├── split.json      # 数据划分
+│   ├── sample.json     # 采样信息
+│   └── README.md       # 数据集说明
+│
+└── Misbot/             # 跨平台机器人检测数据集
+    ├── node.json
+    ├── edge.json
+    ├── label.json
+    ├── split.json
+    ├── sample.json
+    └── README.md
+```
 
-**统计**：229,580用户 + 33,488,192推文，11,826个标注用户
+## 数据集说明
 
-**格式**：
-- node.json: `{node_id: {属性...}, ...}` 字典格式
-- 用户ID以`u`开头，推文ID以`t`开头
-- 关系类型: post, friend, follow
+### Twibot-20 (源域)
 
-## Misbot (中文微博)
+Twitter 机器人检测基准数据集，包含大规模的 Twitter 用户数据。
 
-| 文件 | 大小 | 说明 |
-|------|------|------|
-| node.json | 451 MB | 用户和推文节点 |
-| edge.json | 73 MB | 社交关系 |
-| label.json | 2.3 MB | 用户标签 |
-| split.json | 1.6 MB | 数据划分 |
+**数据规模:**
+- 用户数: 229,580
+- 标注用户: 11,826
+- 边数: (关注关系)
 
-**统计**：99,874用户 + 2,427,195推文，全部用户已标注
+**用于:** 源域训练，学习通用的机器人检测模式
 
-**格式**：
-- node.json: `{node_id: {属性...}, ...}` 字典格式
-- 用户ID格式: `train_u{数字}`
-- 推文ID格式: `t_train_u{数字}_{序号}`
-- 关系类型: post, mention, retweet, follow
+### Misbot (目标域)
 
-## 数据结构对比
+跨平台社交机器人检测数据集。
 
-| 特征 | Twibot-20 | Misbot |
-|------|-----------|--------|
-| 语言 | 英文 | 中文 |
-| 数值特征 | followers, following, listed, tweets | followers, following, tweets |
-| 分类特征 | verified, protected, default_avatar | 20维categorical |
-| 文本 | description + tweets | description + tweets |
+**用于:** 目标域评估，测试少样本跨域迁移能力
 
-详细格式见各数据集目录下的 `sample.json`。
+## 文件格式
+
+### node.json
+用户节点信息，包含用户属性特征。
+
+```json
+{
+    "user_id": {
+        "id": "user_id",
+        "name": "用户名",
+        "screen_name": "显示名",
+        "followers_count": 1000,
+        "friends_count": 500,
+        "statuses_count": 2000,
+        "favourites_count": 300,
+        "listed_count": 10,
+        "verified": false,
+        "default_profile": false,
+        "default_profile_image": false,
+        "description": "用户简介",
+        "created_at": "创建时间"
+    }
+}
+```
+
+### edge.json
+用户关系边，表示关注关系。
+
+```json
+[
+    {"source": "user_id_1", "target": "user_id_2", "relation": "follow"},
+    ...
+]
+```
+
+### label.json
+用户标签。
+
+```json
+{
+    "user_id": "bot",    // 或 "human"
+    ...
+}
+```
+
+### split.json
+数据划分信息。
+
+```json
+{
+    "train": ["user_id_1", "user_id_2", ...],
+    "val": ["user_id_3", "user_id_4", ...],
+    "test": ["user_id_5", "user_id_6", ...]
+}
+```
+
+## 数据预处理
+
+使用预处理脚本将原始数据转换为模型可用的格式:
+
+```bash
+# 预处理 Twibot-20
+python preprocess.py --input dataset/Twibot-20 --output processed_data/twibot20
+
+# 预处理 Misbot
+python preprocess.py --input dataset/Misbot --output processed_data/misbot
+
+# 或使用统一预处理脚本
+python preprocess_unified.py
+```
+
+## 数据引用
+
+如果使用这些数据集，请引用原始论文:
+
+**Twibot-20:**
+```bibtex
+@inproceedings{feng2021twibot,
+    title={TwiBot-20: A Comprehensive Twitter Bot Detection Benchmark},
+    author={...},
+    booktitle={...},
+    year={2021}
+}
+```
+
+## 注意事项
+
+1. 原始数据集较大，不建议直接用于训练
+2. 请先运行预处理脚本生成 `processed_data/` 中的数据
+3. 预处理会进行特征归一化、标签编码等操作
+4. 图结构数据用于未来的图神经网络扩展

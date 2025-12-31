@@ -144,15 +144,16 @@ class EpisodeSampler:
                 query_labels.append(class_label)
         
         # 构建返回字典
+        # Note: cat_features must be converted to long for embedding lookup
         support_set = {
             'num_features': torch.stack(support_num_features),
-            'cat_features': torch.stack(support_cat_features),
+            'cat_features': torch.stack(support_cat_features).long(),
             'labels': torch.tensor(support_labels, dtype=torch.long)
         }
         
         query_set = {
             'num_features': torch.stack(query_num_features),
-            'cat_features': torch.stack(query_cat_features),
+            'cat_features': torch.stack(query_cat_features).long(),
             'labels': torch.tensor(query_labels, dtype=torch.long)
         }
         
