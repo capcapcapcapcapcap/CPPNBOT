@@ -1,0 +1,14 @@
+# Prototypical Network Bot Detection - Dependencies
+
+# Deep Learning
+torch>=2.0.0
+
+# Configuration
+pyyaml>=6.0
+
+# Testing
+pytest>=7.0.0
+hypothesis>=6.0.0
+
+# Optional: Graph Neural Networks (for future extensions)
+# torch-geometric>=2.0.0
