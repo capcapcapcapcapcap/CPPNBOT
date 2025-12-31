@@ -1,0 +1,47 @@
+# Default configuration for Prototypical Network Bot Detection
+# This file contains all default parameters for the experiment
+
+# Model architecture configuration
+model:
+  # Numerical encoder: 5-dim input → 64-dim output
+  num_input_dim: 5
+  num_hidden_dim: 32
+  num_output_dim: 64
+  
+  # Categorical encoder: 3 features → 32-dim output
+  cat_num_categories: [2, 2, 2]  # Number of categories per feature
+  cat_embedding_dim: 16
+  cat_output_dim: 32
+  
+  # Fusion module: (64 + 32) → 256-dim output
+  fusion_output_dim: 256
+  fusion_dropout: 0.1
+  
+  # Distance metric for prototype comparison
+  distance_metric: euclidean  # 'euclidean' or 'cosine'
+
+# Training configuration for meta-learning
+training:
+  # Episode configuration (N-way K-shot)
+  n_way: 2        # Number of classes (human vs bot)
+  k_shot: 5       # Support samples per class
+  n_query: 15     # Query samples per class
+  
+  # Episodes per epoch
+  n_episodes_train: 100
+  n_episodes_val: 50
+  
+  # Training parameters
+  n_epochs: 100
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  
+  # Early stopping
+  patience: 10
+
+# Data paths
+data_dir: processed_data
+output_dir: results
+
+# Reproducibility
+seed: 42

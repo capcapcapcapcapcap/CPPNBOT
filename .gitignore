@@ -31,6 +31,7 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 # Unit test / coverage reports
+tests/
 htmlcov/
 .tox/
 .nox/
@@ -184,7 +185,6 @@ mlruns/
 
 # 检查点和模型
 checkpoints/
-models/
 saved_models/
 
 # 图片和可视化
