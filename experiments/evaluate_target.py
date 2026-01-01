@@ -32,10 +32,10 @@ def setup_logging(output_dir: Path, log_level: str = "INFO") -> logging.Logger:
     logger = logging.getLogger()
     logger.setLevel(getattr(logging, log_level.upper()))
     
-    # Console handler
+    # Console handler - 只输出消息
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
-    console_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    console_format = logging.Formatter('%(message)s')
     console_handler.setFormatter(console_format)
     logger.addHandler(console_handler)
     
@@ -43,18 +43,22 @@ def setup_logging(output_dir: Path, log_level: str = "INFO") -> logging.Logger:
     log_file = output_dir / f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     file_handler = logging.FileHandler(log_file)
     file_handler.setLevel(logging.DEBUG)
-    file_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_format = logging.Formatter('%(asctime)s - %(message)s')
     file_handler.setFormatter(file_format)
     logger.addHandler(file_handler)
     
     return logger
 
 
-def set_seed(seed: int) -> None:
-    """Set random seeds for reproducibility."""
+def set_seed(seed: int = None) -> int:
+    """Set random seeds. If seed is None, use random seed."""
+    if seed is None:
+        import time
+        seed = int(time.time() * 1000) % (2**32)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    return seed
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,8 +75,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model-path", "-m",
         type=str,
-        required=True,
-        help="Path to pre-trained model checkpoint"
+        default=None,
+        help="Path to pre-trained model checkpoint (default: {output_dir}/best_model.pt)"
     )
     parser.add_argument(
         "--dataset",
@@ -155,8 +159,6 @@ def evaluate_k_shot(
     logger: logging.Logger
 ) -> Dict[str, float]:
     """Evaluate model with specific K-shot value."""
-    logger.info(f"Evaluating {k_shot}-shot...")
-    
     # Get indices
     train_indices = dataset.get_split_indices('train')
     test_indices = dataset.get_split_indices('test')
@@ -173,11 +175,8 @@ def evaluate_k_shot(
         n_episodes=n_episodes
     )
     
-    logger.info(f"  {k_shot}-shot Results:")
-    logger.info(f"    Accuracy:  {metrics['accuracy']:.4f}")
-    logger.info(f"    Precision: {metrics['precision']:.4f}")
-    logger.info(f"    Recall:    {metrics['recall']:.4f}")
-    logger.info(f"    F1 Score:  {metrics['f1']:.4f}")
+    logger.info(f"{k_shot:2d}-shot | Acc: {metrics['accuracy']:.4f} | "
+                f"F1: {metrics['f1']:.4f} | P: {metrics['precision']:.4f} | R: {metrics['recall']:.4f}")
     
     return metrics
 
@@ -195,51 +194,46 @@ def main():
     if args.seed:
         config.seed = args.seed
     
-    # Create output directory
+    # 确定模型路径：优先命令行参数，否则用 output_dir/best_model.pt
     output_dir = Path(config.output_dir)
+    if args.model_path:
+        model_path = Path(args.model_path)
+    else:
+        model_path = output_dir / "best_model.pt"
+    
+    if not model_path.exists():
+        print(f"Error: Model not found: {model_path}")
+        print(f"Please train first or specify --model-path")
+        return 1
+    
+    # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Setup logging
+    # Setup logging (简洁格式)
     logger = setup_logging(output_dir)
-    logger.info("=" * 60)
-    logger.info("Prototypical Network Evaluation - Cross-Domain")
-    logger.info("=" * 60)
+    logger.info(f"Evaluating: {model_path}")
     
-    # Set random seed
-    set_seed(config.seed)
-    logger.info(f"Random seed: {config.seed}")
+    # Set random seed (None = 随机)
+    actual_seed = set_seed(config.seed)
+    logger.info(f"Seed: {actual_seed}")
     
     # Determine device
     if args.device:
         device = torch.device(args.device)
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Using device: {device}")
     
     # Load pre-trained model
-    logger.info(f"Loading model from: {args.model_path}")
-    model = load_model(args.model_path, config, device)
-    
-    # Log model info
-    total_params = sum(p.numel() for p in model.parameters())
-    logger.info(f"Model parameters: {total_params:,}")
+    model = load_model(str(model_path), config, device)
     
     # Load target dataset
-    logger.info(f"Loading target dataset: {args.dataset}")
     dataset = BotDataset(args.dataset, config.data_dir)
-    logger.info(f"Dataset size: {len(dataset)} users")
-    logger.info(f"Train samples (for support): {len(dataset.get_split_indices('train'))}")
-    logger.info(f"Test samples: {len(dataset.get_split_indices('test'))}")
+    logger.info(f"Target: {args.dataset} ({len(dataset)} users)")
     
     # Evaluation configuration
-    logger.info("Evaluation configuration:")
-    logger.info(f"  K-shot values: {args.k_shots}")
-    logger.info(f"  Episodes per K-shot: {args.n_episodes}")
+    logger.info(f"K-shots: {args.k_shots}, Episodes: {args.n_episodes}")
     
     # Evaluate with different K-shot values
-    logger.info("-" * 60)
-    logger.info("Starting evaluation...")
-    
     results = {}
     for k_shot in args.k_shots:
         metrics = evaluate_k_shot(
@@ -253,34 +247,19 @@ def main():
         results[k_shot] = metrics
     
     # Save results
-    results_path = output_dir / f"eval_results_{args.dataset}.json"
+    results_path = output_dir / f"eval_{args.dataset}.json"
     
     # Convert keys to strings for JSON serialization
     json_results = {
         'dataset': args.dataset,
-        'model_path': args.model_path,
+        'model_path': str(model_path),
         'n_episodes': args.n_episodes,
-        'seed': config.seed,
         'results': {str(k): v for k, v in results.items()}
     }
     
     with open(results_path, 'w') as f:
         json.dump(json_results, f, indent=2)
-    logger.info(f"Results saved to {results_path}")
-    
-    # Print summary table
-    logger.info("=" * 60)
-    logger.info("Evaluation Summary")
-    logger.info("=" * 60)
-    logger.info(f"{'K-shot':<10} {'Accuracy':<12} {'Precision':<12} {'Recall':<12} {'F1':<12}")
-    logger.info("-" * 60)
-    for k_shot in args.k_shots:
-        m = results[k_shot]
-        logger.info(
-            f"{k_shot:<10} {m['accuracy']:<12.4f} {m['precision']:<12.4f} "
-            f"{m['recall']:<12.4f} {m['f1']:<12.4f}"
-        )
-    logger.info("=" * 60)
+    logger.info(f"Results saved: {results_path}")
     
     return 0
 

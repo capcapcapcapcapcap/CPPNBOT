@@ -129,20 +129,20 @@ class MetaTrainer:
         
         return loss
     
-    def _compute_episode_accuracy(
+    def _compute_episode_metrics(
         self,
         support_set: Dict[str, torch.Tensor],
         query_set: Dict[str, torch.Tensor]
-    ) -> float:
+    ) -> Dict[str, float]:
         """
-        Compute accuracy for a single episode.
+        Compute metrics for a single episode.
         
         Args:
             support_set: Support set with features and labels
             query_set: Query set with features and labels
             
         Returns:
-            Accuracy as a float
+            Dictionary with accuracy, precision, recall, f1
         """
         # Move data to device
         support_set = self._move_to_device(support_set)
@@ -155,10 +155,25 @@ class MetaTrainer:
             predictions = log_probs.argmax(dim=1)
             
             query_labels = query_set['labels']
-            correct = (predictions == query_labels).sum().item()
-            total = query_labels.size(0)
             
-        return correct / total if total > 0 else 0.0
+            # Compute confusion matrix components (for bot class = 1)
+            tp = ((predictions == 1) & (query_labels == 1)).sum().item()
+            fp = ((predictions == 1) & (query_labels == 0)).sum().item()
+            fn = ((predictions == 0) & (query_labels == 1)).sum().item()
+            tn = ((predictions == 0) & (query_labels == 0)).sum().item()
+            
+            total = tp + fp + fn + tn
+            accuracy = (tp + tn) / total if total > 0 else 0.0
+            precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+            recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+            
+        return {
+            'accuracy': accuracy,
+            'precision': precision,
+            'recall': recall,
+            'f1': f1
+        }
     
     def train_epoch(self, n_episodes: int) -> Dict[str, float]:
         """
@@ -168,12 +183,12 @@ class MetaTrainer:
             n_episodes: Number of episodes to sample and train on
             
         Returns:
-            Dictionary with 'loss' (average episode loss) and 'accuracy'
+            Dictionary with loss, accuracy, precision, recall, f1
         """
         self.model.train()
         
         total_loss = 0.0
-        total_accuracy = 0.0
+        total_metrics = {'accuracy': 0.0, 'precision': 0.0, 'recall': 0.0, 'f1': 0.0}
         
         for _ in range(n_episodes):
             # Sample episode
@@ -196,17 +211,16 @@ class MetaTrainer:
             # Accumulate metrics
             total_loss += loss.item()
             
-            # Compute accuracy (without gradients)
-            accuracy = self._compute_episode_accuracy(support_set, query_set)
-            total_accuracy += accuracy
+            # Compute metrics (without gradients)
+            metrics = self._compute_episode_metrics(support_set, query_set)
+            for k in total_metrics:
+                total_metrics[k] += metrics[k]
         
-        avg_loss = total_loss / n_episodes
-        avg_accuracy = total_accuracy / n_episodes
+        result = {'loss': total_loss / n_episodes}
+        for k in total_metrics:
+            result[k] = total_metrics[k] / n_episodes
         
-        return {
-            'loss': avg_loss,
-            'accuracy': avg_accuracy
-        }
+        return result
     
     def validate(self, n_episodes: int) -> Dict[str, float]:
         """
@@ -216,12 +230,12 @@ class MetaTrainer:
             n_episodes: Number of episodes to sample for validation
             
         Returns:
-            Dictionary with 'loss' (average episode loss) and 'accuracy'
+            Dictionary with loss, accuracy, precision, recall, f1
         """
         self.model.eval()
         
         total_loss = 0.0
-        total_accuracy = 0.0
+        total_metrics = {'accuracy': 0.0, 'precision': 0.0, 'recall': 0.0, 'f1': 0.0}
         
         with torch.no_grad():
             for _ in range(n_episodes):
@@ -243,35 +257,36 @@ class MetaTrainer:
                 loss = self.criterion(log_probs, query_labels)
                 total_loss += loss.item()
                 
-                # Compute accuracy
+                # Compute metrics
                 predictions = log_probs.argmax(dim=1)
-                correct = (predictions == query_labels).sum().item()
-                total = query_labels.size(0)
-                total_accuracy += correct / total if total > 0 else 0.0
+                tp = ((predictions == 1) & (query_labels == 1)).sum().item()
+                fp = ((predictions == 1) & (query_labels == 0)).sum().item()
+                fn = ((predictions == 0) & (query_labels == 1)).sum().item()
+                tn = ((predictions == 0) & (query_labels == 0)).sum().item()
+                
+                total = tp + fp + fn + tn
+                total_metrics['accuracy'] += (tp + tn) / total if total > 0 else 0.0
+                precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+                recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+                total_metrics['precision'] += precision
+                total_metrics['recall'] += recall
+                total_metrics['f1'] += 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
         
-        avg_loss = total_loss / n_episodes
-        avg_accuracy = total_accuracy / n_episodes
+        result = {'loss': total_loss / n_episodes}
+        for k in total_metrics:
+            result[k] = total_metrics[k] / n_episodes
         
-        return {
-            'loss': avg_loss,
-            'accuracy': avg_accuracy
-        }
+        return result
 
-    def save_checkpoint(self, filepath: Optional[str] = None, is_best: bool = False) -> str:
+    def save_checkpoint(self, is_best: bool = False) -> None:
         """
-        Save model checkpoint.
+        Save best model checkpoint only.
         
         Args:
-            filepath: Optional path for checkpoint. If None, uses default naming.
-            is_best: If True, also saves as 'best_model.pt'
-            
-        Returns:
-            Path to saved checkpoint
+            is_best: If True, saves as 'best_model.pt'
         """
-        if filepath is None:
-            filepath = self.output_dir / f"checkpoint_epoch_{self.current_epoch}.pt"
-        else:
-            filepath = Path(filepath)
+        if not is_best:
+            return
         
         checkpoint = {
             'epoch': self.current_epoch,
@@ -281,15 +296,8 @@ class MetaTrainer:
             'config': self.config
         }
         
-        torch.save(checkpoint, filepath)
-        logger.info(f"Saved checkpoint to {filepath}")
-        
-        if is_best:
-            best_path = self.output_dir / "best_model.pt"
-            torch.save(checkpoint, best_path)
-            logger.info(f"Saved best model to {best_path}")
-        
-        return str(filepath)
+        best_path = self.output_dir / "best_model.pt"
+        torch.save(checkpoint, best_path)
     
     def load_checkpoint(self, filepath: str) -> None:
         """
@@ -325,55 +333,49 @@ class MetaTrainer:
             n_epochs = self.n_epochs
         
         history = {
-            'train_loss': [],
-            'train_accuracy': [],
-            'val_loss': [],
-            'val_accuracy': []
+            'train_loss': [], 'train_accuracy': [], 'train_precision': [], 
+            'train_recall': [], 'train_f1': [],
+            'val_loss': [], 'val_accuracy': [], 'val_precision': [], 
+            'val_recall': [], 'val_f1': []
         }
         
-        logger.info(f"Starting training for {n_epochs} epochs")
-        logger.info(f"Training episodes per epoch: {self.n_episodes_train}")
-        logger.info(f"Validation episodes: {self.n_episodes_val}")
+        logger.info(f"Training: {n_epochs} epochs, {self.n_episodes_train} episodes/epoch")
         
         for epoch in range(n_epochs):
             self.current_epoch = epoch + 1
             
             # Training
             train_metrics = self.train_epoch(self.n_episodes_train)
-            history['train_loss'].append(train_metrics['loss'])
-            history['train_accuracy'].append(train_metrics['accuracy'])
+            for k, v in train_metrics.items():
+                history[f'train_{k}'].append(v)
             
             # Validation
             val_metrics = self.validate(self.n_episodes_val)
-            history['val_loss'].append(val_metrics['loss'])
-            history['val_accuracy'].append(val_metrics['accuracy'])
+            for k, v in val_metrics.items():
+                history[f'val_{k}'].append(v)
             
-            # Log progress
+            # Log progress (简洁格式)
+            improved = val_metrics['loss'] < self.best_val_loss
+            marker = " *" if improved else ""
             logger.info(
-                f"Epoch {self.current_epoch}/{n_epochs} - "
-                f"Train Loss: {train_metrics['loss']:.4f}, "
-                f"Train Acc: {train_metrics['accuracy']:.4f}, "
-                f"Val Loss: {val_metrics['loss']:.4f}, "
-                f"Val Acc: {val_metrics['accuracy']:.4f}"
+                f"Epoch {self.current_epoch:3d}/{n_epochs} | "
+                f"Loss: {train_metrics['loss']:.4f}/{val_metrics['loss']:.4f} | "
+                f"Acc: {train_metrics['accuracy']:.4f}/{val_metrics['accuracy']:.4f} | "
+                f"F1: {train_metrics['f1']:.4f}/{val_metrics['f1']:.4f}{marker}"
             )
             
             # Check for improvement
-            if val_metrics['loss'] < self.best_val_loss:
+            if improved:
                 self.best_val_loss = val_metrics['loss']
                 self.epochs_without_improvement = 0
                 self.save_checkpoint(is_best=True)
-                logger.info(f"New best validation loss: {self.best_val_loss:.4f}")
             else:
                 self.epochs_without_improvement += 1
-                logger.info(
-                    f"No improvement for {self.epochs_without_improvement} epochs "
-                    f"(patience: {self.patience})"
-                )
             
             # Early stopping
             if self.epochs_without_improvement >= self.patience:
-                logger.info(f"Early stopping triggered after {self.current_epoch} epochs")
+                logger.info(f"Early stopping at epoch {self.current_epoch} (no improvement for {self.patience} epochs)")
                 break
         
-        logger.info("Training completed")
+        logger.info(f"Done. Best val loss: {self.best_val_loss:.4f}")
         return history

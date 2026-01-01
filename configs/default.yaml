@@ -3,18 +3,20 @@
 
 # Model architecture configuration
 model:
-  # Numerical encoder: 5-dim input → 64-dim output
-  num_input_dim: 5
+  # Numerical encoder: 3-dim input → 64-dim output
+  # 共有特征: followers, following, tweets
+  num_input_dim: 3
   num_hidden_dim: 32
   num_output_dim: 64
   
-  # Categorical encoder: 3 features → 32-dim output
-  cat_num_categories: [2, 2, 2]  # Number of categories per feature
+  # Categorical encoder: 1 feature → 16-dim output
+  # 共有特征: verified
+  cat_num_categories: [2]  # Number of categories per feature
   cat_embedding_dim: 16
-  cat_output_dim: 32
+  cat_output_dim: 16
   
-  # Fusion module: (64 + 32) → 256-dim output
-  fusion_output_dim: 256
+  # Fusion module: (64 + 16) → 128-dim output
+  fusion_output_dim: 128
   fusion_dropout: 0.1
   
   # Distance metric for prototype comparison
@@ -24,7 +26,7 @@ model:
 training:
   # Episode configuration (N-way K-shot)
   n_way: 2        # Number of classes (human vs bot)
-  k_shot: 5       # Support samples per class
+  k_shot: 10       # Support samples per class
   n_query: 15     # Query samples per class
   
   # Episodes per epoch
@@ -32,16 +34,16 @@ training:
   n_episodes_val: 50
   
   # Training parameters
-  n_epochs: 100
+  n_epochs: 200
   learning_rate: 0.001
   weight_decay: 0.0001
   
-  # Early stopping
+  # Early stopping (增大耐心值，让模型有更多机会跳出局部最优)
   patience: 10
 
 # Data paths
 data_dir: processed_data
-output_dir: results
+output_dir: results  # 默认实验目录
 
-# Reproducibility
-seed: 42
+# Reproducibility (None = 随机种子)
+seed: null

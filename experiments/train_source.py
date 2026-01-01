@@ -9,7 +9,6 @@ Implements Requirements 10.1, 10.3, 10.4
 """
 
 import argparse
-import json
 import logging
 import os
 import sys
@@ -32,29 +31,33 @@ def setup_logging(output_dir: Path, log_level: str = "INFO") -> logging.Logger:
     logger = logging.getLogger()
     logger.setLevel(getattr(logging, log_level.upper()))
     
-    # Console handler
+    # Console handler - 只输出消息内容
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
-    console_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    console_format = logging.Formatter('%(message)s')
     console_handler.setFormatter(console_format)
     logger.addHandler(console_handler)
     
-    # File handler
-    log_file = output_dir / f"train_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    # File handler - 固定名称 train.log
+    log_file = output_dir / "train.log"
     file_handler = logging.FileHandler(log_file)
     file_handler.setLevel(logging.DEBUG)
-    file_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_format = logging.Formatter('%(asctime)s - %(message)s')
     file_handler.setFormatter(file_format)
     logger.addHandler(file_handler)
     
     return logger
 
 
-def set_seed(seed: int) -> None:
-    """Set random seeds for reproducibility."""
+def set_seed(seed: int = None) -> int:
+    """Set random seeds. If seed is None, use random seed."""
+    if seed is None:
+        import time
+        seed = int(time.time() * 1000) % (2**32)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    return seed
 
 
 def parse_args() -> argparse.Namespace:
@@ -115,43 +118,42 @@ def main():
     config = load_config(args.config)
     
     # Apply command line overrides
-    if args.output_dir:
-        config.output_dir = args.output_dir
     if args.epochs:
         config.training.n_epochs = args.epochs
     if args.lr:
         config.training.learning_rate = args.lr
-    if args.seed:
+    if args.seed is not None:
         config.seed = args.seed
     
+    # 自动生成带时间戳的输出目录
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    else:
+        output_dir = Path(config.output_dir) / timestamp
+    
     # Create output directory
-    output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Setup logging
     logger = setup_logging(output_dir)
-    logger.info("=" * 60)
-    logger.info("Prototypical Network Training - Source Domain")
-    logger.info("=" * 60)
+    logger.info("Prototypical Network Training")
     
-    # Set random seed
-    set_seed(config.seed)
-    logger.info(f"Random seed: {config.seed}")
+    # Set random seed (None = 随机)
+    actual_seed = set_seed(config.seed)
+    logger.info(f"Seed: {actual_seed}")
     
     # Determine device
     if args.device:
         device = torch.device(args.device)
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Using device: {device}")
     
     # Load dataset
-    logger.info(f"Loading dataset: {args.dataset}")
     dataset = BotDataset(args.dataset, config.data_dir)
-    logger.info(f"Dataset size: {len(dataset)} users")
-    logger.info(f"Train samples: {len(dataset.get_split_indices('train'))}")
-    logger.info(f"Val samples: {len(dataset.get_split_indices('val'))}")
-    logger.info(f"Test samples: {len(dataset.get_split_indices('test'))}")
+    logger.info(f"Dataset: {args.dataset} ({len(dataset)} users, "
+                f"train={len(dataset.get_split_indices('train'))}, "
+                f"val={len(dataset.get_split_indices('val'))})")
     
     # Create model configuration dict
     model_config = {
@@ -166,16 +168,13 @@ def main():
     }
     
     # Initialize encoder and model
-    logger.info("Initializing model...")
     encoder = MultiModalEncoder(model_config)
     model = PrototypicalNetwork(encoder, distance=config.model.distance_metric)
     model = model.to(device)
     
     # Log model info
     total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f"Total parameters: {total_params:,}")
-    logger.info(f"Trainable parameters: {trainable_params:,}")
+    logger.info(f"Model: {total_params:,} params, device={device}")
     
     # Create trainer configuration dict
     trainer_config = {
@@ -192,41 +191,24 @@ def main():
     }
     
     # Initialize trainer
-    logger.info("Initializing trainer...")
     trainer = MetaTrainer(model, dataset, trainer_config)
     
-    # Log training configuration
-    logger.info("Training configuration:")
-    logger.info(f"  N-way: {config.training.n_way}")
-    logger.info(f"  K-shot: {config.training.k_shot}")
-    logger.info(f"  N-query: {config.training.n_query}")
-    logger.info(f"  Episodes per epoch: {config.training.n_episodes_train}")
-    logger.info(f"  Validation episodes: {config.training.n_episodes_val}")
-    logger.info(f"  Max epochs: {config.training.n_epochs}")
-    logger.info(f"  Learning rate: {config.training.learning_rate}")
-    logger.info(f"  Weight decay: {config.training.weight_decay}")
-    logger.info(f"  Early stopping patience: {config.training.patience}")
+    # Log training configuration (简洁版)
+    logger.info(f"Config: {config.training.n_way}-way {config.training.k_shot}-shot, "
+                f"lr={config.training.learning_rate}, patience={config.training.patience}")
     
     # Train model
-    logger.info("Starting training...")
+    logger.info("Training...")
     history = trainer.train()
     
-    # Save training history
-    history_path = output_dir / "training_history.json"
-    with open(history_path, 'w') as f:
-        json.dump(history, f, indent=2)
-    logger.info(f"Training history saved to {history_path}")
-    
-    # Log final results
+    # Log final results (简洁版)
     logger.info("=" * 60)
-    logger.info("Training completed!")
-    logger.info(f"Best validation loss: {trainer.best_val_loss:.4f}")
-    logger.info(f"Final training loss: {history['train_loss'][-1]:.4f}")
-    logger.info(f"Final training accuracy: {history['train_accuracy'][-1]:.4f}")
-    logger.info(f"Final validation loss: {history['val_loss'][-1]:.4f}")
-    logger.info(f"Final validation accuracy: {history['val_accuracy'][-1]:.4f}")
-    logger.info(f"Best model saved to: {output_dir / 'best_model.pt'}")
-    logger.info("=" * 60)
+    logger.info(f"Best val loss: {trainer.best_val_loss:.4f}")
+    logger.info(f"Final - Acc: {history['val_accuracy'][-1]:.4f}, "
+                f"F1: {history['val_f1'][-1]:.4f}, "
+                f"P: {history['val_precision'][-1]:.4f}, "
+                f"R: {history['val_recall'][-1]:.4f}")
+    logger.info(f"Model: {output_dir / 'best_model.pt'}")
     
     return 0
 

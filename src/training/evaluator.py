@@ -127,10 +127,10 @@ class Evaluator:
             test_cat_features.append(item['cat_features'])
             test_labels.append(item['label'])
         
-        # Stack into tensors
+        # Stack into tensors (cat_features 需要转为 long)
         query_set = {
             'num_features': torch.stack(test_num_features).to(self.device),
-            'cat_features': torch.stack(test_cat_features).to(self.device)
+            'cat_features': torch.stack(test_cat_features).long().to(self.device)
         }
         test_labels = torch.stack(test_labels).to(self.device)
         

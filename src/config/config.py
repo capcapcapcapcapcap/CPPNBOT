@@ -108,12 +108,12 @@ class Config:
     data_dir: str = "processed_data"
     output_dir: str = "results"
     
-    # Reproducibility
-    seed: int = 42
+    # Reproducibility (None = 随机种子)
+    seed: int = None
     
     def __post_init__(self):
         """Validate configuration parameters."""
-        if self.seed < 0:
+        if self.seed is not None and self.seed < 0:
             raise ValueError(f"seed must be non-negative, got {self.seed}")
 
 

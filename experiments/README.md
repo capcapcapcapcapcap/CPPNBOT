@@ -43,9 +43,7 @@ python experiments/train_source.py --output-dir results/exp1
 
 **输出文件:**
 - `best_model.pt`: 最佳模型检查点
-- `checkpoint_epoch_N.pt`: 每个 epoch 的检查点
-- `training_history.json`: 训练历史 (损失、准确率)
-- `train_YYYYMMDD_HHMMSS.log`: 训练日志
+- `train.log`: 训练日志
 
 ### evaluate_target.py
 
