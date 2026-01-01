@@ -203,7 +203,9 @@ class BasePreprocessor(ABC):
             "n_tweets": n_tweets,
             "n_edges": n_edges,
             "num_feature_dim": 5,
+            "num_feature_names": ["followers", "following", "tweets", "listed_count", "account_age_days"],
             "cat_feature_dim": 3,
+            "cat_feature_names": ["verified", "protected", "default_avatar"],
             "processed_time": dt.now().isoformat()
         }
         with open(self.config.output_dir / "metadata.json", 'w') as f:
@@ -253,7 +255,7 @@ class Twibot20Preprocessor(BasePreprocessor):
         return user_df, tweet_df, labels, splits
     
     def extract_numerical_features(self, user_df: pd.DataFrame) -> torch.Tensor:
-        """提取5维数值特征"""
+        """提取5维数值特征: [followers, following, tweets, listed_count, account_age_days]"""
         features = []
         reference_date = dt(2020, 9, 1)
         
@@ -264,11 +266,10 @@ class Twibot20Preprocessor(BasePreprocessor):
             followers = metrics.get('followers_count', 0) or 0
             # 2. following_count
             following = metrics.get('following_count', 0) or 0
-            # 3. listed_count (Twibot特有)
+            # 3. tweet_count
+            tweets = metrics.get('tweet_count', 0) or 0
+            # 4. listed_count
             listed = metrics.get('listed_count', 0) or 0
-            # 4. username_length
-            username = row.get('username', '') or ''
-            username_len = len(str(username))
             # 5. account_age_days
             try:
                 created_at = row.get('created_at')
@@ -283,25 +284,25 @@ class Twibot20Preprocessor(BasePreprocessor):
             except:
                 age = 0
             
-            features.append([followers, following, listed, username_len, age])
+            features.append([followers, following, tweets, listed, age])
         
         return torch.tensor(features, dtype=torch.float32)
     
     def extract_categorical_features(self, user_df: pd.DataFrame) -> torch.Tensor:
-        """提取3维分类特征"""
+        """提取3维分类特征: [verified, protected, default_avatar]"""
         features = []
         default_avatar_url = 'http://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png'
         
         for _, row in user_df.iterrows():
-            # 1. default_avatar
+            # 1. verified
+            verified = 1 if row.get('verified') == True else 0
+            # 2. protected
+            protected = 1 if row.get('protected') == True else 0
+            # 3. default_avatar
             img_url = row.get('profile_image_url', '') or ''
             default_avatar = 1 if img_url.strip() == default_avatar_url else 0
-            # 2. verified
-            verified = 1 if row.get('verified') == True else 0
-            # 3. protected
-            protected = 1 if row.get('protected') == True else 0
             
-            features.append([default_avatar, verified, protected])
+            features.append([verified, protected, default_avatar])
         
         return torch.tensor(features, dtype=torch.float32)
     
@@ -447,7 +448,7 @@ class MisbotPreprocessor(BasePreprocessor):
         return user_df, tweet_df, labels, splits
     
     def extract_numerical_features(self, user_df: pd.DataFrame) -> torch.Tensor:
-        """提取5维数值特征 (Misbot只有3维，后2维填0)"""
+        """提取5维数值特征: [followers, following, tweets, 0, 0] (Misbot缺少listed_count和account_age)"""
         features = []
         
         for _, row in user_df.iterrows():
@@ -455,25 +456,34 @@ class MisbotPreprocessor(BasePreprocessor):
             numerical = profile.get('numerical', [0, 0, 0])
             
             if len(numerical) >= 3:
-                # [followers, following, tweets, 0, 0]
-                features.append([numerical[0], numerical[1], numerical[2], 0, 0])
+                # Misbot numerical: [followers, following, tweets]
+                # 对齐到5维: [followers, following, tweets, 0, 0]
+                followers = numerical[0] if numerical[0] is not None else 0
+                following = numerical[1] if numerical[1] is not None else 0
+                tweets = numerical[2] if numerical[2] is not None else 0
+                features.append([followers, following, tweets, 0, 0])
             else:
                 features.append([0, 0, 0, 0, 0])
         
         return torch.tensor(features, dtype=torch.float32)
     
     def extract_categorical_features(self, user_df: pd.DataFrame) -> torch.Tensor:
-        """提取3维分类特征 (取Misbot categorical的前3维)"""
+        """提取3维分类特征 (取Misbot 20维one-hot的前3维)"""
         features = []
         
         for _, row in user_df.iterrows():
             profile = row.get('profile', {}) or {}
-            categorical = profile.get('categorical', [0, 0, 0])
+            categorical = profile.get('categorical', [])
             
+            # Misbot的categorical是20维one-hot向量，取前3维
             if len(categorical) >= 3:
-                features.append(categorical[:3])
+                # 确保值为0或1的整数
+                feat = [int(categorical[i]) if categorical[i] is not None else 0 for i in range(3)]
+                features.append(feat)
             else:
-                features.append([0, 0, 0])
+                # 如果不足3维，用0填充
+                feat = [int(categorical[i]) if i < len(categorical) and categorical[i] is not None else 0 for i in range(3)]
+                features.append(feat)
         
         return torch.tensor(features, dtype=torch.float32)
     
