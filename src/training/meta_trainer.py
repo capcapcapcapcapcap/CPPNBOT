@@ -1,13 +1,19 @@
 """
 MetaTrainer: 元训练器
 
-Implements Requirements 7.1, 7.2, 7.3, 7.4, 7.5
+Implements Requirements 10.1, 10.2, 10.3, 10.4, 10.5, 10.6
+
+Supports multi-modal training with:
+- Text data loading and passing
+- Graph data loading and passing
+- Selective text backbone freezing
+- Separate learning rates for text encoder
 """
 
 import logging
 import os
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -27,6 +33,12 @@ class MetaTrainer:
     Implements episodic meta-learning training for prototypical networks.
     Supports training with multiple episodes per epoch, validation,
     checkpoint saving, and early stopping.
+    
+    Multi-modal support:
+    - Text data loading and encoding
+    - Graph data loading and encoding
+    - Selective text backbone freezing
+    - Separate learning rates for text encoder
     """
     
     def __init__(
@@ -41,17 +53,7 @@ class MetaTrainer:
         Args:
             model: PrototypicalNetwork instance
             dataset: BotDataset for training
-            config: Configuration dictionary with keys:
-                - n_way: Number of classes per episode
-                - k_shot: Number of support samples per class
-                - n_query: Number of query samples per class
-                - n_episodes_train: Episodes per training epoch
-                - n_episodes_val: Episodes for validation
-                - n_epochs: Total training epochs
-                - learning_rate: Optimizer learning rate
-                - weight_decay: Optimizer weight decay
-                - patience: Early stopping patience
-                - output_dir: Directory for saving checkpoints
+            config: Configuration dictionary
         """
         self.model = model
         self.dataset = dataset
@@ -74,12 +76,41 @@ class MetaTrainer:
         self.output_dir = Path(config.get('output_dir', 'results'))
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Optimizer
-        self.optimizer = optim.Adam(
-            model.parameters(),
-            lr=config.get('learning_rate', 1e-3),
-            weight_decay=config.get('weight_decay', 1e-4)
-        )
+        # Multi-modal configuration
+        self.enabled_modalities = config.get('enabled_modalities', ['num', 'cat'])
+        self.use_text = 'text' in self.enabled_modalities
+        self.use_graph = 'graph' in self.enabled_modalities
+
+        # Load text data if text modality is enabled
+        self._user_texts: Optional[Dict[int, str]] = None
+        if self.use_text:
+            try:
+                self._user_texts = dataset.get_user_texts()
+                logger.info(f"Loaded {len(self._user_texts)} user texts for text encoding")
+            except FileNotFoundError:
+                logger.warning("User texts not found, disabling text modality")
+                self.use_text = False
+                self.enabled_modalities = [m for m in self.enabled_modalities if m != 'text']
+        
+        # Graph data (loaded from dataset)
+        self._edge_index: Optional[torch.Tensor] = None
+        self._edge_type: Optional[torch.Tensor] = None
+        if self.use_graph:
+            self._edge_index = dataset.edge_index
+            self._edge_type = dataset.edge_type
+            logger.info(f"Loaded graph with {self._edge_index.size(1)} edges for graph encoding")
+        
+        # Device
+        self.device = next(model.parameters()).device if len(list(model.parameters())) > 0 else torch.device('cpu')
+        
+        # Move graph data to device
+        if self._edge_index is not None:
+            self._edge_index = self._edge_index.to(self.device)
+        if self._edge_type is not None:
+            self._edge_type = self._edge_type.to(self.device)
+        
+        # Setup optimizer with separate learning rates for text encoder
+        self.optimizer = self._setup_optimizer(config)
         
         # Loss function (negative log-likelihood)
         self.criterion = nn.NLLLoss()
@@ -93,34 +124,133 @@ class MetaTrainer:
         self.epochs_without_improvement = 0
         self.current_epoch = 0
         
-        # Device
-        self.device = next(model.parameters()).device if len(list(model.parameters())) > 0 else torch.device('cpu')
+        # Handle text backbone freezing
+        text_freeze_backbone = config.get('text_freeze_backbone', True)
+        if self.use_text and hasattr(model.encoder, 'freeze_text_backbone'):
+            if text_freeze_backbone:
+                model.encoder.freeze_text_backbone()
+                logger.info("Text encoder backbone frozen")
+            else:
+                model.encoder.unfreeze_text_backbone()
+                logger.info("Text encoder backbone unfrozen")
+
+    def _setup_optimizer(self, config: Dict) -> optim.Optimizer:
+        """Setup optimizer with separate learning rates for text encoder."""
+        learning_rate = config.get('learning_rate', 1e-3)
+        text_learning_rate = config.get('text_learning_rate', 1e-5)
+        weight_decay = config.get('weight_decay', 1e-4)
+        
+        # Check if model has text encoder with separate parameters
+        if self.use_text and hasattr(self.model.encoder, 'text_encoder') and self.model.encoder.text_encoder is not None:
+            # Separate parameters for text encoder
+            text_params = []
+            other_params = []
+            
+            for name, param in self.model.named_parameters():
+                if 'text_encoder' in name:
+                    text_params.append(param)
+                else:
+                    other_params.append(param)
+            
+            # Create parameter groups with different learning rates
+            param_groups = [
+                {'params': other_params, 'lr': learning_rate},
+                {'params': text_params, 'lr': text_learning_rate}
+            ]
+            
+            logger.info(f"Using separate learning rates: main={learning_rate}, text={text_learning_rate}")
+            return optim.Adam(param_groups, weight_decay=weight_decay)
+        else:
+            # Standard optimizer for all parameters
+            return optim.Adam(
+                self.model.parameters(),
+                lr=learning_rate,
+                weight_decay=weight_decay
+            )
 
     def _move_to_device(self, data: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Move data dictionary to the model's device."""
         return {k: v.to(self.device) for k, v in data.items()}
     
+    def _get_texts_for_indices(self, indices: torch.Tensor) -> Optional[List[str]]:
+        """Get text data for given sample indices.
+        
+        Handles user_texts.json format which contains dictionaries with
+        'description' and 'tweets' fields.
+        """
+        if not self.use_text or self._user_texts is None:
+            return None
+        
+        texts = []
+        for idx in indices.tolist():
+            text_data = self._user_texts.get(idx, "")
+            
+            # Handle dictionary format from user_texts.json
+            if isinstance(text_data, dict):
+                # Combine description and tweets into a single string
+                description = text_data.get('description', '') or ''
+                tweets = text_data.get('tweets', []) or []
+                
+                # Join tweets with space
+                tweets_text = ' '.join(tweets) if tweets else ''
+                
+                # Combine description and tweets
+                combined = f"{description} {tweets_text}".strip()
+                texts.append(combined if combined else "")
+            elif isinstance(text_data, str):
+                texts.append(text_data if text_data else "")
+            else:
+                texts.append("")
+        
+        return texts
+    
+    def _get_subgraph_for_indices(
+        self, 
+        indices: torch.Tensor
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """Get subgraph data for given sample indices."""
+        if not self.use_graph or self._edge_index is None:
+            return None, None
+        
+        # Return full graph - the model will select relevant nodes
+        return self._edge_index, self._edge_type
+
     def _compute_episode_loss(
         self,
         support_set: Dict[str, torch.Tensor],
-        query_set: Dict[str, torch.Tensor]
+        query_set: Dict[str, torch.Tensor],
+        support_indices: Optional[torch.Tensor] = None,
+        query_indices: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
-        """
-        Compute loss for a single episode.
-        
-        Args:
-            support_set: Support set with features and labels
-            query_set: Query set with features and labels
-            
-        Returns:
-            Scalar loss tensor (negative log-likelihood on query set)
-        """
+        """Compute loss for a single episode."""
         # Move data to device
         support_set = self._move_to_device(support_set)
         query_set = self._move_to_device(query_set)
         
-        # Forward pass
-        output = self.model(support_set, query_set)
+        # Get text data if enabled
+        support_texts = None
+        query_texts = None
+        if support_indices is not None:
+            support_texts = self._get_texts_for_indices(support_indices)
+        if query_indices is not None:
+            query_texts = self._get_texts_for_indices(query_indices)
+        
+        # Get graph data if enabled
+        edge_index, edge_type = None, None
+        if support_indices is not None and query_indices is not None:
+            edge_index, edge_type = self._get_subgraph_for_indices(
+                torch.cat([support_indices, query_indices])
+            )
+        
+        # Forward pass with multi-modal data
+        output = self.model(
+            support_set, 
+            query_set,
+            support_texts=support_texts,
+            query_texts=query_texts,
+            edge_index=edge_index,
+            edge_type=edge_type
+        )
         log_probs = output['log_probs']
         
         # Compute NLL loss
@@ -132,25 +262,40 @@ class MetaTrainer:
     def _compute_episode_metrics(
         self,
         support_set: Dict[str, torch.Tensor],
-        query_set: Dict[str, torch.Tensor]
+        query_set: Dict[str, torch.Tensor],
+        support_indices: Optional[torch.Tensor] = None,
+        query_indices: Optional[torch.Tensor] = None
     ) -> Dict[str, float]:
-        """
-        Compute metrics for a single episode.
-        
-        Args:
-            support_set: Support set with features and labels
-            query_set: Query set with features and labels
-            
-        Returns:
-            Dictionary with accuracy, precision, recall, f1
-        """
+        """Compute metrics for a single episode."""
         # Move data to device
         support_set = self._move_to_device(support_set)
         query_set = self._move_to_device(query_set)
         
+        # Get text data if enabled
+        support_texts = None
+        query_texts = None
+        if support_indices is not None:
+            support_texts = self._get_texts_for_indices(support_indices)
+        if query_indices is not None:
+            query_texts = self._get_texts_for_indices(query_indices)
+        
+        # Get graph data if enabled
+        edge_index, edge_type = None, None
+        if support_indices is not None and query_indices is not None:
+            edge_index, edge_type = self._get_subgraph_for_indices(
+                torch.cat([support_indices, query_indices])
+            )
+        
         # Forward pass
         with torch.no_grad():
-            output = self.model(support_set, query_set)
+            output = self.model(
+                support_set, 
+                query_set,
+                support_texts=support_texts,
+                query_texts=query_texts,
+                edge_index=edge_index,
+                edge_type=edge_type
+            )
             log_probs = output['log_probs']
             predictions = log_probs.argmax(dim=1)
             
@@ -174,33 +319,32 @@ class MetaTrainer:
             'recall': recall,
             'f1': f1
         }
-    
+
     def train_epoch(self, n_episodes: int) -> Dict[str, float]:
-        """
-        Train for one epoch by sampling multiple episodes.
-        
-        Args:
-            n_episodes: Number of episodes to sample and train on
-            
-        Returns:
-            Dictionary with loss, accuracy, precision, recall, f1
-        """
+        """Train for one epoch by sampling multiple episodes."""
         self.model.train()
         
         total_loss = 0.0
         total_metrics = {'accuracy': 0.0, 'precision': 0.0, 'recall': 0.0, 'f1': 0.0}
         
         for _ in range(n_episodes):
-            # Sample episode
+            # Sample episode (with indices for multi-modal data)
             support_set, query_set = self.sampler.sample(
                 self.dataset, self.train_indices
             )
+            
+            # Get original indices from sampler if available
+            support_indices = getattr(self.sampler, '_last_support_indices', None)
+            query_indices = getattr(self.sampler, '_last_query_indices', None)
             
             # Zero gradients
             self.optimizer.zero_grad()
             
             # Compute loss
-            loss = self._compute_episode_loss(support_set, query_set)
+            loss = self._compute_episode_loss(
+                support_set, query_set, 
+                support_indices, query_indices
+            )
             
             # Backward pass
             loss.backward()
@@ -212,7 +356,10 @@ class MetaTrainer:
             total_loss += loss.item()
             
             # Compute metrics (without gradients)
-            metrics = self._compute_episode_metrics(support_set, query_set)
+            metrics = self._compute_episode_metrics(
+                support_set, query_set,
+                support_indices, query_indices
+            )
             for k in total_metrics:
                 total_metrics[k] += metrics[k]
         
@@ -223,15 +370,7 @@ class MetaTrainer:
         return result
     
     def validate(self, n_episodes: int) -> Dict[str, float]:
-        """
-        Validate on validation set episodes.
-        
-        Args:
-            n_episodes: Number of episodes to sample for validation
-            
-        Returns:
-            Dictionary with loss, accuracy, precision, recall, f1
-        """
+        """Validate on validation set episodes."""
         self.model.eval()
         
         total_loss = 0.0
@@ -244,12 +383,38 @@ class MetaTrainer:
                     self.dataset, self.val_indices
                 )
                 
+                # Get original indices from sampler if available
+                support_indices = getattr(self.sampler, '_last_support_indices', None)
+                query_indices = getattr(self.sampler, '_last_query_indices', None)
+                
                 # Move data to device
                 support_set = self._move_to_device(support_set)
                 query_set = self._move_to_device(query_set)
                 
+                # Get text data if enabled
+                support_texts = None
+                query_texts = None
+                if support_indices is not None:
+                    support_texts = self._get_texts_for_indices(support_indices)
+                if query_indices is not None:
+                    query_texts = self._get_texts_for_indices(query_indices)
+                
+                # Get graph data if enabled
+                edge_index, edge_type = None, None
+                if support_indices is not None and query_indices is not None:
+                    edge_index, edge_type = self._get_subgraph_for_indices(
+                        torch.cat([support_indices, query_indices])
+                    )
+                
                 # Forward pass
-                output = self.model(support_set, query_set)
+                output = self.model(
+                    support_set, 
+                    query_set,
+                    support_texts=support_texts,
+                    query_texts=query_texts,
+                    edge_index=edge_index,
+                    edge_type=edge_type
+                )
                 log_probs = output['log_probs']
                 
                 # Compute loss
@@ -279,12 +444,7 @@ class MetaTrainer:
         return result
 
     def save_checkpoint(self, is_best: bool = False) -> None:
-        """
-        Save best model checkpoint only.
-        
-        Args:
-            is_best: If True, saves as 'best_model.pt'
-        """
+        """Save best model checkpoint only."""
         if not is_best:
             return
         
@@ -293,19 +453,15 @@ class MetaTrainer:
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'best_val_loss': self.best_val_loss,
-            'config': self.config
+            'config': self.config,
+            'enabled_modalities': self.enabled_modalities
         }
         
         best_path = self.output_dir / "best_model.pt"
         torch.save(checkpoint, best_path)
     
     def load_checkpoint(self, filepath: str) -> None:
-        """
-        Load model checkpoint.
-        
-        Args:
-            filepath: Path to checkpoint file
-        """
+        """Load model checkpoint."""
         checkpoint = torch.load(filepath, map_location=self.device)
         
         self.model.load_state_dict(checkpoint['model_state_dict'])
@@ -313,22 +469,18 @@ class MetaTrainer:
         self.current_epoch = checkpoint['epoch']
         self.best_val_loss = checkpoint['best_val_loss']
         
+        # Load enabled modalities if available
+        if 'enabled_modalities' in checkpoint:
+            saved_modalities = checkpoint['enabled_modalities']
+            if saved_modalities != self.enabled_modalities:
+                logger.warning(
+                    f"Checkpoint modalities {saved_modalities} differ from current {self.enabled_modalities}"
+                )
+        
         logger.info(f"Loaded checkpoint from {filepath} (epoch {self.current_epoch})")
     
     def train(self, n_epochs: Optional[int] = None) -> Dict[str, list]:
-        """
-        Complete training flow with validation and early stopping.
-        
-        Args:
-            n_epochs: Number of epochs to train. If None, uses config value.
-            
-        Returns:
-            Dictionary with training history:
-                - 'train_loss': List of training losses per epoch
-                - 'train_accuracy': List of training accuracies per epoch
-                - 'val_loss': List of validation losses per epoch
-                - 'val_accuracy': List of validation accuracies per epoch
-        """
+        """Complete training flow with validation and early stopping."""
         if n_epochs is None:
             n_epochs = self.n_epochs
         
@@ -339,7 +491,10 @@ class MetaTrainer:
             'val_recall': [], 'val_f1': []
         }
         
+        # Log training configuration
+        modality_str = ', '.join(self.enabled_modalities)
         logger.info(f"Training: {n_epochs} epochs, {self.n_episodes_train} episodes/epoch")
+        logger.info(f"Enabled modalities: {modality_str}")
         
         for epoch in range(n_epochs):
             self.current_epoch = epoch + 1
@@ -354,7 +509,7 @@ class MetaTrainer:
             for k, v in val_metrics.items():
                 history[f'val_{k}'].append(v)
             
-            # Log progress (简洁格式)
+            # Log progress
             improved = val_metrics['loss'] < self.best_val_loss
             marker = " *" if improved else ""
             logger.info(

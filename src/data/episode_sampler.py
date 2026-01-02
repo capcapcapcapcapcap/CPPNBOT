@@ -114,9 +114,11 @@ class EpisodeSampler:
         support_num_features = []
         support_cat_features = []
         support_labels = []
+        support_indices = []  # Store original indices for multi-modal data
         query_num_features = []
         query_cat_features = []
         query_labels = []
+        query_indices = []  # Store original indices for multi-modal data
         
         for class_label in selected_classes:
             # 随机打乱该类别的索引
@@ -135,6 +137,7 @@ class EpisodeSampler:
                 support_num_features.append(item['num_features'])
                 support_cat_features.append(item['cat_features'])
                 support_labels.append(class_label)
+                support_indices.append(idx.item())
             
             # 收集 query 特征
             for idx in query_idx:
@@ -142,6 +145,11 @@ class EpisodeSampler:
                 query_num_features.append(item['num_features'])
                 query_cat_features.append(item['cat_features'])
                 query_labels.append(class_label)
+                query_indices.append(idx.item())
+        
+        # Store indices for multi-modal data retrieval
+        self._last_support_indices = torch.tensor(support_indices, dtype=torch.long)
+        self._last_query_indices = torch.tensor(query_indices, dtype=torch.long)
         
         # 构建返回字典
         # Note: cat_features must be converted to long for embedding lookup

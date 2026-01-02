@@ -1,6 +1,6 @@
 """Prototypical Network for few-shot classification."""
 
-from typing import Dict, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -13,6 +13,8 @@ class PrototypicalNetwork(nn.Module):
     Implements the prototypical network algorithm for few-shot classification.
     Computes class prototypes from support samples and classifies query samples
     based on distance to prototypes.
+    
+    Supports multi-modal data including text and graph features.
     """
     
     def __init__(
@@ -105,7 +107,11 @@ class PrototypicalNetwork(nn.Module):
     def forward(
         self,
         support_set: Dict[str, torch.Tensor],
-        query_set: Dict[str, torch.Tensor]
+        query_set: Dict[str, torch.Tensor],
+        support_texts: Optional[List[str]] = None,
+        query_texts: Optional[List[str]] = None,
+        edge_index: Optional[torch.Tensor] = None,
+        edge_type: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass for prototypical network.
@@ -121,6 +127,10 @@ class PrototypicalNetwork(nn.Module):
             query_set: Dictionary containing:
                 - 'num_features': Tensor[n_query, num_dim]
                 - 'cat_features': Tensor[n_query, cat_dim]
+            support_texts: List of text strings for support samples (optional)
+            query_texts: List of text strings for query samples (optional)
+            edge_index: Graph edge indices (optional)
+            edge_type: Edge types (optional)
                 
         Returns:
             Dictionary containing:
@@ -128,18 +138,45 @@ class PrototypicalNetwork(nn.Module):
                 - 'prototypes': Tensor[n_classes, embed_dim] class prototypes
                 - 'query_embeddings': Tensor[n_query, embed_dim] query embeddings
         """
+        # Check if encoder supports multi-modal data
+        encoder_supports_multimodal = hasattr(self.encoder, 'text_encoder') or hasattr(self.encoder, 'enabled_modalities')
+        
         # Encode support set
-        support_features = self.encoder({
-            'num_features': support_set['num_features'],
-            'cat_features': support_set['cat_features']
-        })
+        if encoder_supports_multimodal:
+            support_features = self.encoder(
+                {
+                    'num_features': support_set['num_features'],
+                    'cat_features': support_set['cat_features']
+                },
+                texts=support_texts,
+                edge_index=edge_index,
+                edge_type=edge_type
+            )
+        else:
+            # Simple encoder without multi-modal support
+            support_features = self.encoder({
+                'num_features': support_set['num_features'],
+                'cat_features': support_set['cat_features']
+            })
         support_labels = support_set['labels']
         
         # Encode query set
-        query_features = self.encoder({
-            'num_features': query_set['num_features'],
-            'cat_features': query_set['cat_features']
-        })
+        if encoder_supports_multimodal:
+            query_features = self.encoder(
+                {
+                    'num_features': query_set['num_features'],
+                    'cat_features': query_set['cat_features']
+                },
+                texts=query_texts,
+                edge_index=edge_index,
+                edge_type=edge_type
+            )
+        else:
+            # Simple encoder without multi-modal support
+            query_features = self.encoder({
+                'num_features': query_set['num_features'],
+                'cat_features': query_set['cat_features']
+            })
         
         # Compute prototypes
         prototypes = self.compute_prototypes(support_features, support_labels)
@@ -160,7 +197,11 @@ class PrototypicalNetwork(nn.Module):
     def classify(
         self,
         support_set: Dict[str, torch.Tensor],
-        query_set: Dict[str, torch.Tensor]
+        query_set: Dict[str, torch.Tensor],
+        support_texts: Optional[List[str]] = None,
+        query_texts: Optional[List[str]] = None,
+        edge_index: Optional[torch.Tensor] = None,
+        edge_type: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Classify query samples given support set.
@@ -170,13 +211,23 @@ class PrototypicalNetwork(nn.Module):
         Args:
             support_set: Support set dictionary with features and labels
             query_set: Query set dictionary with features
+            support_texts: List of text strings for support samples (optional)
+            query_texts: List of text strings for query samples (optional)
+            edge_index: Graph edge indices (optional)
+            edge_type: Edge types (optional)
             
         Returns:
             Tuple of:
                 - predictions: Tensor[n_query] predicted class labels
                 - probabilities: Tensor[n_query, n_classes] class probabilities
         """
-        output = self.forward(support_set, query_set)
+        output = self.forward(
+            support_set, query_set,
+            support_texts=support_texts,
+            query_texts=query_texts,
+            edge_index=edge_index,
+            edge_type=edge_type
+        )
         log_probs = output['log_probs']
         
         # Get predictions (argmax of log probs)
