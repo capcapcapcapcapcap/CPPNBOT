@@ -10,8 +10,13 @@ import torch.nn.functional as F
 class AttentionFusion(nn.Module):
     """注意力多模态融合: (64 + 32 + 256 + 128) → 256
     
-    Uses attention-based weighting to balance modality contributions.
-    Supports configurable modality combinations.
+    使用门控注意力机制和深层特征交互来融合多模态特征。
+    
+    架构:
+    1. 各模态投影到统一维度
+    2. 基于输入的动态注意力权重计算
+    3. 加权融合 + 残差连接
+    4. 深层MLP进行特征交互
     
     Requirements:
         - 8.1: Output 256-dimensional fused representation
@@ -61,23 +66,43 @@ class AttentionFusion(nn.Module):
             'graph': graph_dim
         }
         
-        # Create projection layers for each enabled modality to common dimension
+        # 1. 模态投影层：将各模态投影到统一维度
         self.modality_projections = nn.ModuleDict()
         for modality in self.enabled_modalities:
             dim = self.modality_dims[modality]
-            self.modality_projections[modality] = nn.Linear(dim, output_dim)
+            self.modality_projections[modality] = nn.Sequential(
+                nn.Linear(dim, output_dim),
+                nn.LayerNorm(output_dim),
+                nn.GELU(),
+                nn.Dropout(dropout)
+            )
         
-        # Attention mechanism: learn attention weights for each modality
-        # Each modality gets a learnable attention score
-        self.attention_weights = nn.ParameterDict()
+        # 2. 动态注意力网络：基于输入计算注意力权重
+        # 每个模态有一个注意力评分网络
+        self.attention_networks = nn.ModuleDict()
         for modality in self.enabled_modalities:
-            self.attention_weights[modality] = nn.Parameter(torch.ones(1))
+            self.attention_networks[modality] = nn.Sequential(
+                nn.Linear(output_dim, output_dim // 4),
+                nn.GELU(),
+                nn.Linear(output_dim // 4, 1)
+            )
         
-        # Dropout for regularization
-        self.dropout = nn.Dropout(dropout)
+        # 3. 深层特征交互 MLP
+        self.interaction_mlp = nn.Sequential(
+            nn.Linear(output_dim, output_dim * 2),
+            nn.LayerNorm(output_dim * 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(output_dim * 2, output_dim),
+            nn.LayerNorm(output_dim),
+            nn.GELU(),
+            nn.Dropout(dropout)
+        )
         
-        # Layer normalization for output
-        self.layer_norm = nn.LayerNorm(output_dim)
+        # 4. 输出投影（带残差）
+        self.output_projection = nn.Linear(output_dim, output_dim)
+        self.output_norm = nn.LayerNorm(output_dim)
+        self.output_dropout = nn.Dropout(dropout)
         
         # Store last computed attention weights for inspection
         self._last_attention_weights: Dict[str, float] = {}
@@ -90,7 +115,7 @@ class AttentionFusion(nn.Module):
         graph_embed: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
-        Fuse embeddings from multiple modalities using attention weighting.
+        Fuse embeddings from multiple modalities using dynamic attention.
         
         Args:
             num_embed: Tensor[batch, num_dim] numerical embeddings (optional)
@@ -125,39 +150,46 @@ class AttentionFusion(nn.Module):
         batch_size = first_embed.size(0)
         device = first_embed.device
         
-        # Project each modality to common dimension
+        # Step 1: Project each modality to common dimension
         projected = {}
         for modality, embed in available_embeddings.items():
             projected[modality] = self.modality_projections[modality](embed)
         
-        # Compute attention weights using softmax over available modalities
-        raw_weights = []
+        # Step 2: Compute dynamic attention weights based on projected features
+        attention_scores = []
         modality_order = list(projected.keys())
+        
         for modality in modality_order:
-            raw_weights.append(self.attention_weights[modality])
+            # 基于投影后的特征计算注意力分数
+            score = self.attention_networks[modality](projected[modality])  # [batch, 1]
+            attention_scores.append(score)
         
-        # Stack and apply softmax to get normalized attention weights
-        raw_weights_tensor = torch.cat(raw_weights)
-        attention_probs = F.softmax(raw_weights_tensor, dim=0)
+        # Stack and apply softmax: [batch, n_modalities]
+        attention_scores = torch.cat(attention_scores, dim=1)
+        attention_probs = F.softmax(attention_scores, dim=1)
         
-        # Store attention weights for inspection
+        # Store mean attention weights for inspection
         self._last_attention_weights = {}
+        mean_weights = attention_probs.mean(dim=0)
         for i, modality in enumerate(modality_order):
-            self._last_attention_weights[modality] = attention_probs[i].item()
+            self._last_attention_weights[modality] = mean_weights[i].item()
         
-        # Weighted sum of projected embeddings
+        # Step 3: Weighted sum of projected embeddings
         fused = torch.zeros(batch_size, self.output_dim, device=device)
         for i, modality in enumerate(modality_order):
-            weight = attention_probs[i]
+            weight = attention_probs[:, i:i+1]  # [batch, 1]
             fused = fused + weight * projected[modality]
         
-        # Apply layer normalization
-        fused = self.layer_norm(fused)
+        # Step 4: Deep feature interaction with residual connection
+        interaction_out = self.interaction_mlp(fused)
+        fused = fused + interaction_out  # Residual connection
         
-        # Apply dropout
-        fused = self.dropout(fused)
+        # Step 5: Output projection with residual
+        output = self.output_projection(fused)
+        output = self.output_norm(output + fused)  # Residual connection
+        output = self.output_dropout(output)
         
-        return fused
+        return output
     
     def get_attention_weights(self) -> Dict[str, float]:
         """Return the last computed attention weights for each modality.
@@ -172,8 +204,8 @@ class AttentionFusion(nn.Module):
 class FusionModule(nn.Module):
     """多模态特征融合: (64 + 32) → 256
     
-    Concatenates numerical and categorical embeddings,
-    then projects to output dimension with dropout.
+    使用深层MLP融合数值和分类特征。
+    包含残差连接和多层非线性变换。
     """
     
     def __init__(
@@ -196,11 +228,23 @@ class FusionModule(nn.Module):
         self.cat_dim = cat_dim
         self.output_dim = output_dim
         
-        # Projection layer: concatenated → output_dim
         concat_dim = num_dim + cat_dim
-        self.projection = nn.Linear(concat_dim, output_dim)
         
-        # Dropout for regularization
+        # 深层融合网络
+        self.fusion_net = nn.Sequential(
+            nn.Linear(concat_dim, output_dim),
+            nn.LayerNorm(output_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(output_dim, output_dim * 2),
+            nn.LayerNorm(output_dim * 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(output_dim * 2, output_dim),
+            nn.LayerNorm(output_dim)
+        )
+        
+        # 输出dropout
         self.dropout = nn.Dropout(dropout)
     
     def forward(
@@ -221,8 +265,8 @@ class FusionModule(nn.Module):
         # Concatenate embeddings
         concat = torch.cat([num_embed, cat_embed], dim=1)
         
-        # Project to output dimension
-        output = self.projection(concat)
+        # Deep fusion
+        output = self.fusion_net(concat)
         
         # Apply dropout
         output = self.dropout(output)
