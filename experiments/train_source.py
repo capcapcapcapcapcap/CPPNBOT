@@ -254,6 +254,7 @@ def main():
         model_config.update({
             'text_model_name': config.model.text_model_name,
             'text_output_dim': config.model.text_output_dim,
+            'text_hidden_size': config.model.text_hidden_size,
             'text_max_length': config.model.text_max_length,
             'text_freeze_backbone': config.model.text_freeze_backbone,
         })

@@ -59,13 +59,12 @@ def precompute_text_embeddings(
     datasets: list,
     data_dir: str = "processed_data",
     model_name: str = "xlm-roberta-base",
-    output_dim: int = 256,
     max_length: int = 128,
     batch_size: int = 64,
     device: str = "cuda",
     use_fp16: bool = True
 ):
-    """预计算文本嵌入"""
+    """预计算文本嵌入（保存原始CLS输出，不做投影）"""
     import json
     import torch
     from contextlib import nullcontext
@@ -107,7 +106,7 @@ def precompute_text_embeddings(
     model.eval()
     
     hidden_size = model.config.hidden_size
-    projection = torch.nn.Linear(hidden_size, output_dim).to(device_obj)
+    logger.info(f"Hidden size: {hidden_size}")
     
     for dataset in datasets:
         data_path = Path(data_dir) / dataset
@@ -136,8 +135,8 @@ def precompute_text_embeddings(
             # 准备文本
             all_texts = [combine_text_fields(user_texts.get(idx, "")) for idx in range(num_users)]
             
-            # 初始化嵌入
-            embeddings = torch.zeros(num_users, output_dim)
+            # 初始化嵌入（保存原始维度）
+            embeddings = torch.zeros(num_users, hidden_size)
             
             # 批量处理
             with torch.no_grad():
@@ -160,14 +159,13 @@ def precompute_text_embeddings(
                     
                     with autocast_ctx:
                         outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-                        cls_output = outputs.last_hidden_state[:, 0, :]
-                        batch_embeddings = projection(cls_output.float())
+                        cls_output = outputs.last_hidden_state[:, 0, :].float()
                     
                     for j, text in enumerate(batch_texts):
                         if not text.strip():
-                            batch_embeddings[j] = 0
+                            cls_output[j] = 0
                     
-                    embeddings[i:i+batch_size_actual] = batch_embeddings.cpu()
+                    embeddings[i:i+batch_size_actual] = cls_output.cpu()
             
             # 保存
             output_path = data_path / "text_embeddings.pt"
@@ -177,7 +175,7 @@ def precompute_text_embeddings(
             # 保存元数据
             meta = {
                 "model_name": model_name,
-                "output_dim": output_dim,
+                "hidden_size": hidden_size,
                 "max_length": max_length,
                 "num_users": num_users
             }

@@ -107,12 +107,18 @@ class MultiModalEncoder(nn.Module):
         self.text_encoder = None
         self.text_projection = None  # 用于预计算嵌入的投影层
         text_output_dim = config.get('text_output_dim', 256)
+        text_hidden_size = config.get('text_hidden_size', 768)  # XLM-RoBERTa base hidden size
         
         if 'text' in self.enabled_modalities:
             if self.use_precomputed_text_embeddings:
-                # 预计算嵌入模式: 只需要一个可选的投影层
-                # 预计算嵌入已经是 text_output_dim 维度，不需要额外投影
-                pass
+                # 预计算嵌入模式: 添加可学习的投影层
+                # 预计算嵌入是原始 CLS 输出 (768维)，需要投影到 text_output_dim
+                self.text_projection = nn.Sequential(
+                    nn.Linear(text_hidden_size, text_output_dim),
+                    nn.LayerNorm(text_output_dim),
+                    nn.GELU(),
+                    nn.Dropout(config.get('fusion_dropout', 0.1))
+                )
             else:
                 # 在线编码模式: 加载完整的 TextEncoder
                 from .encoders.text import TextEncoder
@@ -234,7 +240,11 @@ class MultiModalEncoder(nn.Module):
         if 'text' in self.enabled_modalities:
             if text_embeddings is not None:
                 # 使用预计算的文本嵌入 (优先)
-                embeddings['text'] = text_embeddings
+                # 预计算嵌入是原始 CLS 输出，需要通过投影层
+                if self.text_projection is not None:
+                    embeddings['text'] = self.text_projection(text_embeddings)
+                else:
+                    embeddings['text'] = text_embeddings
             elif self.text_encoder is not None and texts is not None:
                 # 使用在线编码
                 embeddings['text'] = self.text_encoder(texts)

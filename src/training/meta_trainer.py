@@ -648,7 +648,7 @@ class MetaTrainer:
             mode='min', 
             factor=0.5,      # 每次降低50%
             patience=5,      # 5个epoch无改善则降低
-                min_lr=1e-6
+            min_lr=1e-6
         )
         
         # Log training configuration
@@ -658,6 +658,10 @@ class MetaTrainer:
         
         for epoch in range(n_epochs):
             self.current_epoch = epoch + 1
+            
+            # 每个 epoch 开始时重新计算图嵌入（使用更新后的编码器）
+            if self.use_graph and self._edge_index is not None:
+                self._precompute_graph_embeddings(self.dataset)
             
             # Training
             train_metrics = self.train_epoch(self.n_episodes_train)

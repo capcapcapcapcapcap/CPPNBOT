@@ -3,7 +3,8 @@
 预计算文本嵌入
 
 在训练前一次性计算所有用户的文本嵌入并保存为 .pt 文件。
-训练时直接加载预计算的嵌入，避免重复的 Transformer 推理。
+保存 XLM-RoBERTa 的原始 CLS 输出（768维），不做投影。
+投影层在模型内部，可以端到端学习。
 
 使用方法:
     python precompute_text_embeddings.py --dataset twibot20
@@ -11,7 +12,7 @@
     python precompute_text_embeddings.py --dataset all
 
 输出:
-    processed_data/{dataset}/text_embeddings.pt
+    processed_data/{dataset}/text_embeddings.pt (768维)
 """
 
 import argparse
@@ -60,7 +61,6 @@ def combine_text_fields(text_data) -> str:
 def precompute_embeddings(
     data_path: Path,
     model_name: str = "xlm-roberta-base",
-    output_dim: int = 256,
     max_length: int = 128,
     batch_size: int = 64,
     device: str = "cuda",
@@ -69,17 +69,19 @@ def precompute_embeddings(
     """
     预计算所有用户的文本嵌入
     
+    直接保存 XLM-RoBERTa 的 CLS 输出（768维），不做投影。
+    投影层在模型内部，可以端到端学习。
+    
     Args:
         data_path: 数据集路径
         model_name: 预训练模型名称
-        output_dim: 输出嵌入维度
         max_length: 最大token长度
         batch_size: 批处理大小 (GPU建议128-256，CPU建议32)
         device: 计算设备
         use_fp16: 是否使用半精度加速 (仅GPU)
     
     Returns:
-        Tensor[num_users, output_dim] 所有用户的文本嵌入
+        Tensor[num_users, hidden_size] 所有用户的文本嵌入（768维）
     """
     # 检查设备
     if device == "cuda" and not torch.cuda.is_available():
@@ -113,12 +115,12 @@ def precompute_embeddings(
     model = model.to(device)
     model.eval()
     
-    # 投影层
+    # 获取隐藏层维度（不做投影，直接保存原始维度）
     hidden_size = model.config.hidden_size
-    projection = torch.nn.Linear(hidden_size, output_dim).to(device)
+    logger.info(f"Hidden size: {hidden_size}")
     
     # 初始化嵌入张量
-    embeddings = torch.zeros(num_users, output_dim)
+    embeddings = torch.zeros(num_users, hidden_size)
     
     # 准备所有文本
     all_texts = []
@@ -153,22 +155,21 @@ def precompute_embeddings(
             # Forward with autocast
             with autocast_ctx:
                 outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-                cls_output = outputs.last_hidden_state[:, 0, :]
-                batch_embeddings = projection(cls_output.float())  # 确保投影层输入是float32
+                cls_output = outputs.last_hidden_state[:, 0, :].float()  # [batch, hidden_size]
             
             # 将空文本的嵌入置零
             for j, text in enumerate(batch_texts):
                 if not text.strip():
-                    batch_embeddings[j] = 0
+                    cls_output[j] = 0
             
-            # 存储
-            embeddings[i:i+batch_size_actual] = batch_embeddings.cpu()
+            # 存储（不做投影）
+            embeddings[i:i+batch_size_actual] = cls_output.cpu()
     
     return embeddings
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Precompute text embeddings")
+    parser = argparse.ArgumentParser(description="Precompute text embeddings (raw CLS output, no projection)")
     parser.add_argument(
         "--dataset", "-d",
         type=str,
@@ -181,12 +182,6 @@ def main():
         type=str,
         default="xlm-roberta-base",
         help="Pretrained model name (default: xlm-roberta-base)"
-    )
-    parser.add_argument(
-        "--output-dim",
-        type=int,
-        default=256,
-        help="Output embedding dimension (default: 256)"
     )
     parser.add_argument(
         "--max-length",
@@ -248,7 +243,6 @@ def main():
             embeddings = precompute_embeddings(
                 data_path=data_path,
                 model_name=args.model,
-                output_dim=args.output_dim,
                 max_length=args.max_length,
                 batch_size=args.batch_size,
                 device=args.device,
@@ -265,7 +259,7 @@ def main():
             meta_path = data_path / "text_embeddings_meta.json"
             meta = {
                 "model_name": args.model,
-                "output_dim": args.output_dim,
+                "hidden_size": embeddings.shape[1],  # 768 for xlm-roberta-base
                 "max_length": args.max_length,
                 "num_users": embeddings.shape[0]
             }

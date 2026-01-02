@@ -41,6 +41,7 @@ class ModelConfig:
     # Text encoder (XLM-RoBERTa)
     text_model_name: str = "xlm-roberta-base"
     text_output_dim: int = 256
+    text_hidden_size: int = 768  # XLM-RoBERTa base hidden size
     text_max_length: int = 128  # 减小默认值以加速处理
     text_freeze_backbone: bool = True
     use_precomputed_text_embeddings: bool = True  # 使用预计算的文本嵌入以加速训练
@@ -196,6 +197,7 @@ def _dict_to_model_config(d: dict) -> ModelConfig:
         cat_output_dim=d.get('cat_output_dim', 32),
         text_model_name=d.get('text_model_name', 'xlm-roberta-base'),
         text_output_dim=d.get('text_output_dim', 256),
+        text_hidden_size=d.get('text_hidden_size', 768),
         text_max_length=d.get('text_max_length', 128),
         text_freeze_backbone=d.get('text_freeze_backbone', True),
         use_precomputed_text_embeddings=d.get('use_precomputed_text_embeddings', True),
