@@ -60,7 +60,11 @@ class BotDataset:
         
         # 预计算的文本嵌入（延迟加载）
         self._text_embeddings: Optional[torch.Tensor] = None
-        self._has_precomputed_embeddings = (self.data_path / "text_embeddings.pt").exists()
+        self._has_precomputed_text_embeddings = (self.data_path / "text_embeddings.pt").exists()
+        
+        # 预计算的图嵌入（延迟加载）
+        self._graph_embeddings: Optional[torch.Tensor] = None
+        self._has_precomputed_graph_embeddings = (self.data_path / "graph_embeddings.pt").exists()
 
     def _load_tensor(self, filename: str) -> torch.Tensor:
         """
@@ -177,7 +181,7 @@ class BotDataset:
 
     def has_precomputed_text_embeddings(self) -> bool:
         """检查是否有预计算的文本嵌入"""
-        return self._has_precomputed_embeddings
+        return self._has_precomputed_text_embeddings
     
     def get_text_embeddings(self) -> torch.Tensor:
         """
@@ -213,4 +217,44 @@ class BotDataset:
             Tensor[len(indices), embed_dim] 对应的文本嵌入
         """
         embeddings = self.get_text_embeddings()
+        return embeddings[indices]
+
+    def has_precomputed_graph_embeddings(self) -> bool:
+        """检查是否有预计算的图嵌入"""
+        return self._has_precomputed_graph_embeddings
+    
+    def get_graph_embeddings(self) -> torch.Tensor:
+        """
+        加载预计算的图嵌入
+        
+        Returns:
+            Tensor[num_users, embed_dim] 预计算的图嵌入
+            
+        Raises:
+            FileNotFoundError: 当嵌入文件不存在时
+        """
+        if self._graph_embeddings is not None:
+            return self._graph_embeddings
+        
+        embeddings_path = self.data_path / "graph_embeddings.pt"
+        if not embeddings_path.exists():
+            raise FileNotFoundError(
+                f"Precomputed graph embeddings not found: {embeddings_path}\n"
+                f"Run: python precompute_graph_embeddings.py --dataset {self.dataset_name}"
+            )
+        
+        self._graph_embeddings = torch.load(embeddings_path, weights_only=True)
+        return self._graph_embeddings
+    
+    def get_graph_embeddings_for_indices(self, indices: torch.Tensor) -> torch.Tensor:
+        """
+        获取指定索引的预计算图嵌入
+        
+        Args:
+            indices: 用户索引张量
+            
+        Returns:
+            Tensor[len(indices), embed_dim] 对应的图嵌入
+        """
+        embeddings = self.get_graph_embeddings()
         return embeddings[indices]

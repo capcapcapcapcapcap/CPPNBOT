@@ -193,6 +193,7 @@ class MultiModalEncoder(nn.Module):
         batch: Dict[str, torch.Tensor],
         texts: Optional[List[str]] = None,
         text_embeddings: Optional[torch.Tensor] = None,
+        graph_embeddings: Optional[torch.Tensor] = None,
         edge_index: Optional[torch.Tensor] = None,
         edge_type: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
@@ -205,12 +206,14 @@ class MultiModalEncoder(nn.Module):
                 - 'cat_features': Tensor[batch, cat_input_dim]
             texts: List of text strings (optional, for online text encoding)
             text_embeddings: Precomputed text embeddings Tensor[batch, text_dim] (optional)
-            edge_index: Graph edge indices (optional, for graph modality)
-            edge_type: Edge types (optional, for graph modality)
+            graph_embeddings: Precomputed graph embeddings Tensor[batch, graph_dim] (optional)
+            edge_index: Graph edge indices (optional, for online graph encoding)
+            edge_type: Edge types (optional, for online graph encoding)
             
         Note:
             - 如果同时提供 texts 和 text_embeddings，优先使用 text_embeddings
-            - 使用预计算嵌入时不需要加载 TextEncoder，大幅加速训练
+            - 如果同时提供 graph_embeddings 和 edge_index，优先使用 graph_embeddings
+            - 使用预计算嵌入时不需要加载对应的编码器，大幅加速训练
                 
         Returns:
             Tensor[batch, fusion_output_dim] user embeddings
@@ -236,21 +239,22 @@ class MultiModalEncoder(nn.Module):
                 # 使用在线编码
                 embeddings['text'] = self.text_encoder(texts)
         
-        # Encode graph features if enabled
-        if self.graph_encoder is not None and edge_index is not None:
-            # For graph encoding, we need initial node features
-            # Use concatenation of available embeddings as input
-            if embeddings:
-                # Concatenate available embeddings for graph input
-                available_embeds = list(embeddings.values())
-                graph_input = torch.cat(available_embeds, dim=1)
-            else:
-                # Fallback: use zeros if no other embeddings available
-                batch_size = batch.get('num_features', batch.get('cat_features')).size(0)
-                device = next(self.parameters()).device
-                graph_input = torch.zeros(batch_size, self.graph_encoder.input_dim, device=device)
-            
-            embeddings['graph'] = self.graph_encoder(graph_input, edge_index, edge_type)
+        # Handle graph features
+        if 'graph' in self.enabled_modalities:
+            if graph_embeddings is not None:
+                # 使用预计算的图嵌入 (优先)
+                embeddings['graph'] = graph_embeddings
+            elif self.graph_encoder is not None and edge_index is not None:
+                # 使用在线图编码（需要所有节点的特征）
+                if embeddings:
+                    available_embeds = list(embeddings.values())
+                    graph_input = torch.cat(available_embeds, dim=1)
+                else:
+                    batch_size = batch.get('num_features', batch.get('cat_features')).size(0)
+                    device = next(self.parameters()).device
+                    graph_input = torch.zeros(batch_size, self.graph_encoder.input_dim, device=device)
+                
+                embeddings['graph'] = self.graph_encoder(graph_input, edge_index, edge_type)
 
         
         # Fuse embeddings

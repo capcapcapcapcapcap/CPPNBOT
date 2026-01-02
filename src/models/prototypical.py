@@ -112,6 +112,8 @@ class PrototypicalNetwork(nn.Module):
         query_texts: Optional[List[str]] = None,
         support_text_embeddings: Optional[torch.Tensor] = None,
         query_text_embeddings: Optional[torch.Tensor] = None,
+        support_graph_embeddings: Optional[torch.Tensor] = None,
+        query_graph_embeddings: Optional[torch.Tensor] = None,
         edge_index: Optional[torch.Tensor] = None,
         edge_type: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
@@ -133,11 +135,14 @@ class PrototypicalNetwork(nn.Module):
             query_texts: List of text strings for query samples (optional, for online encoding)
             support_text_embeddings: Precomputed text embeddings for support (optional)
             query_text_embeddings: Precomputed text embeddings for query (optional)
-            edge_index: Graph edge indices (optional)
-            edge_type: Edge types (optional)
+            support_graph_embeddings: Precomputed graph embeddings for support (optional)
+            query_graph_embeddings: Precomputed graph embeddings for query (optional)
+            edge_index: Graph edge indices (optional, for online graph encoding)
+            edge_type: Edge types (optional, for online graph encoding)
             
         Note:
             - 如果同时提供 texts 和 text_embeddings，优先使用 text_embeddings
+            - 如果同时提供 graph_embeddings 和 edge_index，优先使用 graph_embeddings
                 
         Returns:
             Dictionary containing:
@@ -157,6 +162,7 @@ class PrototypicalNetwork(nn.Module):
                 },
                 texts=support_texts,
                 text_embeddings=support_text_embeddings,
+                graph_embeddings=support_graph_embeddings,
                 edge_index=edge_index,
                 edge_type=edge_type
             )
@@ -177,6 +183,7 @@ class PrototypicalNetwork(nn.Module):
                 },
                 texts=query_texts,
                 text_embeddings=query_text_embeddings,
+                graph_embeddings=query_graph_embeddings,
                 edge_index=edge_index,
                 edge_type=edge_type
             )
@@ -211,6 +218,8 @@ class PrototypicalNetwork(nn.Module):
         query_texts: Optional[List[str]] = None,
         support_text_embeddings: Optional[torch.Tensor] = None,
         query_text_embeddings: Optional[torch.Tensor] = None,
+        support_graph_embeddings: Optional[torch.Tensor] = None,
+        query_graph_embeddings: Optional[torch.Tensor] = None,
         edge_index: Optional[torch.Tensor] = None,
         edge_type: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -226,6 +235,8 @@ class PrototypicalNetwork(nn.Module):
             query_texts: List of text strings for query samples (optional)
             support_text_embeddings: Precomputed text embeddings for support (optional)
             query_text_embeddings: Precomputed text embeddings for query (optional)
+            support_graph_embeddings: Precomputed graph embeddings for support (optional)
+            query_graph_embeddings: Precomputed graph embeddings for query (optional)
             edge_index: Graph edge indices (optional)
             edge_type: Edge types (optional)
             
@@ -240,6 +251,8 @@ class PrototypicalNetwork(nn.Module):
             query_texts=query_texts,
             support_text_embeddings=support_text_embeddings,
             query_text_embeddings=query_text_embeddings,
+            support_graph_embeddings=support_graph_embeddings,
+            query_graph_embeddings=query_graph_embeddings,
             edge_index=edge_index,
             edge_type=edge_type
         )

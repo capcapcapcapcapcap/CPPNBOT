@@ -113,10 +113,23 @@ class MetaTrainer:
         # Graph data (loaded from dataset)
         self._edge_index: Optional[torch.Tensor] = None
         self._edge_type: Optional[torch.Tensor] = None
+        self._precomputed_graph_embeddings: Optional[torch.Tensor] = None
+        
         if self.use_graph:
-            self._edge_index = dataset.edge_index
-            self._edge_type = dataset.edge_type
-            logger.info(f"Loaded graph with {self._edge_index.size(1)} edges for graph encoding")
+            # 优先使用预计算的图嵌入
+            if dataset.has_precomputed_graph_embeddings():
+                try:
+                    self._precomputed_graph_embeddings = dataset.get_graph_embeddings()
+                    logger.info(f"Loaded precomputed graph embeddings: {self._precomputed_graph_embeddings.shape}")
+                except FileNotFoundError as e:
+                    logger.warning(f"Precomputed graph embeddings not found: {e}")
+                    logger.warning("Will compute graph embeddings at initialization (slower)")
+            
+            # 如果没有预计算嵌入，加载图数据用于在线计算
+            if self._precomputed_graph_embeddings is None:
+                self._edge_index = dataset.edge_index
+                self._edge_type = dataset.edge_type
+                logger.info(f"Loaded graph with {self._edge_index.size(1)} edges for graph encoding")
         
         # Device
         self.device = next(model.parameters()).device if len(list(model.parameters())) > 0 else torch.device('cpu')
@@ -130,6 +143,13 @@ class MetaTrainer:
         # Move precomputed embeddings to device
         if self._precomputed_text_embeddings is not None:
             self._precomputed_text_embeddings = self._precomputed_text_embeddings.to(self.device)
+        if self._precomputed_graph_embeddings is not None:
+            self._precomputed_graph_embeddings = self._precomputed_graph_embeddings.to(self.device)
+        
+        # Precompute graph embeddings if graph modality is enabled but no precomputed file
+        # 如果没有预计算的图嵌入文件，在初始化时计算
+        if self.use_graph and self._precomputed_graph_embeddings is None and self._edge_index is not None:
+            self._precompute_graph_embeddings(dataset)
         
         # Setup optimizer with separate learning rates for text encoder
         self.optimizer = self._setup_optimizer(config)
@@ -156,6 +176,44 @@ class MetaTrainer:
                 else:
                     model.encoder.unfreeze_text_backbone()
                     logger.info("Text encoder backbone unfrozen")
+
+    def _precompute_graph_embeddings(self, dataset: BotDataset) -> None:
+        """预计算所有节点的图嵌入
+        
+        图编码需要完整的图结构，因此在训练前预计算所有节点的图嵌入，
+        然后在 episode 中只选择相关节点的嵌入。
+        """
+        logger.info("Precomputing graph embeddings for all nodes...")
+        
+        # 获取所有节点的基础特征
+        num_users = len(dataset)
+        
+        # 构建所有节点的输入特征（num + cat + text）
+        with torch.no_grad():
+            # 数值特征
+            num_features = dataset.num_features.to(self.device)
+            num_embed = self.model.encoder.numerical_encoder(num_features) if self.model.encoder.numerical_encoder else None
+            
+            # 分类特征
+            cat_features = dataset.cat_features.to(self.device)
+            cat_embed = self.model.encoder.categorical_encoder(cat_features) if self.model.encoder.categorical_encoder else None
+            
+            # 文本特征（如果有预计算嵌入）
+            text_embed = self._precomputed_text_embeddings if self._precomputed_text_embeddings is not None else None
+            
+            # 拼接可用的嵌入作为图编码器输入
+            available_embeds = [e for e in [num_embed, cat_embed, text_embed] if e is not None]
+            if available_embeds:
+                graph_input = torch.cat(available_embeds, dim=1)
+            else:
+                graph_input = torch.zeros(num_users, self.model.encoder.graph_encoder.input_dim, device=self.device)
+            
+            # 图编码
+            self._precomputed_graph_embeddings = self.model.encoder.graph_encoder(
+                graph_input, self._edge_index, self._edge_type
+            )
+        
+        logger.info(f"Precomputed graph embeddings: {self._precomputed_graph_embeddings.shape}")
 
     def _setup_optimizer(self, config: Dict) -> optim.Optimizer:
         """Setup optimizer with separate learning rates for text encoder."""
@@ -233,12 +291,28 @@ class MetaTrainer:
         self, 
         indices: torch.Tensor
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
-        """Get subgraph data for given sample indices."""
+        """Get subgraph data for given sample indices.
+        
+        注意：当使用预计算图嵌入时，此方法不再使用。
+        """
         if not self.use_graph or self._edge_index is None:
             return None, None
         
         # Return full graph - the model will select relevant nodes
         return self._edge_index, self._edge_type
+    
+    def _get_graph_embeddings_for_indices(
+        self, 
+        indices: torch.Tensor
+    ) -> Optional[torch.Tensor]:
+        """Get precomputed graph embeddings for given sample indices.
+        
+        Returns None if graph modality is disabled or embeddings not precomputed.
+        """
+        if not self.use_graph or self._precomputed_graph_embeddings is None:
+            return None
+        
+        return self._precomputed_graph_embeddings[indices]
     
     def _get_text_embeddings_for_indices(
         self, 
@@ -284,12 +358,13 @@ class MetaTrainer:
             else:
                 query_texts = self._get_texts_for_indices(query_indices)
         
-        # Get graph data if enabled
-        edge_index, edge_type = None, None
-        if support_indices is not None and query_indices is not None:
-            edge_index, edge_type = self._get_subgraph_for_indices(
-                torch.cat([support_indices, query_indices])
-            )
+        # Get graph embeddings if enabled (precomputed)
+        support_graph_embeddings = None
+        query_graph_embeddings = None
+        if self.use_graph and support_indices is not None:
+            support_graph_embeddings = self._get_graph_embeddings_for_indices(support_indices)
+        if self.use_graph and query_indices is not None:
+            query_graph_embeddings = self._get_graph_embeddings_for_indices(query_indices)
         
         # Forward pass with multi-modal data
         output = self.model(
@@ -299,8 +374,8 @@ class MetaTrainer:
             query_texts=query_texts,
             support_text_embeddings=support_text_embeddings,
             query_text_embeddings=query_text_embeddings,
-            edge_index=edge_index,
-            edge_type=edge_type
+            support_graph_embeddings=support_graph_embeddings,
+            query_graph_embeddings=query_graph_embeddings,
         )
         log_probs = output['log_probs']
         
@@ -339,12 +414,13 @@ class MetaTrainer:
             else:
                 query_texts = self._get_texts_for_indices(query_indices)
         
-        # Get graph data if enabled
-        edge_index, edge_type = None, None
-        if support_indices is not None and query_indices is not None:
-            edge_index, edge_type = self._get_subgraph_for_indices(
-                torch.cat([support_indices, query_indices])
-            )
+        # Get graph embeddings if enabled (precomputed)
+        support_graph_embeddings = None
+        query_graph_embeddings = None
+        if self.use_graph and support_indices is not None:
+            support_graph_embeddings = self._get_graph_embeddings_for_indices(support_indices)
+        if self.use_graph and query_indices is not None:
+            query_graph_embeddings = self._get_graph_embeddings_for_indices(query_indices)
         
         # Forward pass
         with torch.no_grad():
@@ -355,8 +431,8 @@ class MetaTrainer:
                 query_texts=query_texts,
                 support_text_embeddings=support_text_embeddings,
                 query_text_embeddings=query_text_embeddings,
-                edge_index=edge_index,
-                edge_type=edge_type
+                support_graph_embeddings=support_graph_embeddings,
+                query_graph_embeddings=query_graph_embeddings,
             )
             log_probs = output['log_probs']
             predictions = log_probs.argmax(dim=1)
@@ -470,12 +546,13 @@ class MetaTrainer:
                     else:
                         query_texts = self._get_texts_for_indices(query_indices)
                 
-                # Get graph data if enabled
-                edge_index, edge_type = None, None
-                if support_indices is not None and query_indices is not None:
-                    edge_index, edge_type = self._get_subgraph_for_indices(
-                        torch.cat([support_indices, query_indices])
-                    )
+                # Get graph embeddings if enabled (precomputed)
+                support_graph_embeddings = None
+                query_graph_embeddings = None
+                if self.use_graph and support_indices is not None:
+                    support_graph_embeddings = self._get_graph_embeddings_for_indices(support_indices)
+                if self.use_graph and query_indices is not None:
+                    query_graph_embeddings = self._get_graph_embeddings_for_indices(query_indices)
                 
                 # Forward pass
                 output = self.model(
@@ -485,8 +562,8 @@ class MetaTrainer:
                     query_texts=query_texts,
                     support_text_embeddings=support_text_embeddings,
                     query_text_embeddings=query_text_embeddings,
-                    edge_index=edge_index,
-                    edge_type=edge_type
+                    support_graph_embeddings=support_graph_embeddings,
+                    query_graph_embeddings=query_graph_embeddings,
                 )
                 log_probs = output['log_probs']
                 

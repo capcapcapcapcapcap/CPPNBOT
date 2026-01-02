@@ -14,7 +14,7 @@
   - 数值编码器: `num_input_dim` (8), `num_hidden_dim` (32), `num_output_dim` (64)
   - 分类编码器: `cat_num_categories` ([2,2,2,2,2]), `cat_embedding_dim` (16), `cat_output_dim` (32)
   - 文本编码器: `text_model_name`, `text_output_dim` (256), `text_max_length` (512), `text_freeze_backbone`
-  - 图编码器: `graph_input_dim`, `graph_hidden_dim`, `graph_output_dim`, `graph_num_heads`, `graph_num_layers`
+  - 图编码器 (RGCN): `graph_input_dim`, `graph_hidden_dim`, `graph_output_dim`, `graph_num_relations`, `graph_num_layers`, `graph_num_bases`
   - 融合模块: `fusion_output_dim` (256), `fusion_dropout` (0.1), `fusion_use_attention`
   - 模态配置: `enabled_modalities` (['num', 'cat'])
   - 距离度量: `distance_metric` ('euclidean' 或 'cosine')

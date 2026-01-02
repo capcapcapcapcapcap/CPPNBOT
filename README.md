@@ -59,20 +59,19 @@ python preprocess_unified.py --dataset twibot20
 python preprocess_unified.py --dataset misbot
 ```
 
-### 3. 预计算文本嵌入 (可选但推荐)
+### 3. 预计算嵌入 (可选但推荐)
 
-如果要使用文本模态，建议预先计算文本嵌入以大幅加速训练：
+如果要使用文本或图模态，建议预先计算嵌入以大幅加速训练：
 
 ```bash
-# 预计算所有数据集的文本嵌入
-python precompute_text_embeddings.py --dataset all
+# 预计算文本嵌入
+python precompute_text_embeddings.py --dataset all --device cuda
 
-# 或单独处理
-python precompute_text_embeddings.py --dataset twibot20 --device cuda
-python precompute_text_embeddings.py --dataset misbot --device cuda
+# 预计算图嵌入
+python precompute_graph_embeddings.py --dataset all --device cuda
 ```
 
-预计算后，训练时会自动使用预计算的嵌入，避免重复的 Transformer 推理。
+预计算后，训练时会自动使用预计算的嵌入，避免重复的 Transformer/RGCN 推理。
 
 ### 4. 训练模型
 

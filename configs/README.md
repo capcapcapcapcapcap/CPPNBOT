@@ -158,10 +158,11 @@ model:
   fusion_use_attention: true
 ```
 
-## 预计算文本嵌入
+## 预计算嵌入
 
-为了加速包含文本模态的训练，建议预先计算文本嵌入：
+为了加速包含文本或图模态的训练，建议预先计算嵌入：
 
+### 文本嵌入
 ```bash
 # 预计算所有数据集的文本嵌入
 python precompute_text_embeddings.py --dataset all
@@ -171,10 +172,23 @@ python precompute_text_embeddings.py --dataset twibot20
 python precompute_text_embeddings.py --dataset misbot
 ```
 
-预计算后，训练时会自动使用 `text_embeddings.pt` 文件，避免重复的 Transformer 推理。
+### 图嵌入
+```bash
+# 预计算所有数据集的图嵌入
+python precompute_graph_embeddings.py --dataset all
+
+# 或单独处理
+python precompute_graph_embeddings.py --dataset twibot20
+python precompute_graph_embeddings.py --dataset misbot
+
+# 包含文本嵌入作为图输入（需要先预计算文本嵌入）
+python precompute_graph_embeddings.py --dataset all --use-text
+```
+
+预计算后，训练时会自动使用预计算的嵌入文件。
 
 **性能对比**:
-- 在线编码: ~30秒/epoch (XLM-RoBERTa 推理开销大)
+- 在线编码: ~30秒/epoch (Transformer/RGCN 推理开销大)
 - 预计算嵌入: ~0.1秒/epoch (直接查表)
 
 ## 模态组合说明

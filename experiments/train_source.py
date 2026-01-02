@@ -266,12 +266,13 @@ def main():
             'graph_input_dim': config.model.graph_input_dim,
             'graph_hidden_dim': config.model.graph_hidden_dim,
             'graph_output_dim': config.model.graph_output_dim,
-            'graph_num_heads': config.model.graph_num_heads,
+            'graph_num_relations': config.model.graph_num_relations,
             'graph_num_layers': config.model.graph_num_layers,
             'graph_dropout': config.model.graph_dropout,
+            'graph_num_bases': config.model.graph_num_bases,
         })
-        logger.info(f"Graph encoder: {config.model.graph_num_layers} GAT layers, "
-                   f"{config.model.graph_num_heads} heads")
+        logger.info(f"Graph encoder: {config.model.graph_num_layers} RGCN layers, "
+                   f"{config.model.graph_num_relations} relation types")
     
     # Initialize encoder and model
     encoder = MultiModalEncoder(model_config)
