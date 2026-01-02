@@ -5,7 +5,12 @@ Cross-Domain Evaluation Script
 Evaluates a pre-trained prototypical network on the target domain (Misbot)
 using few-shot adaptation with different K-shot values.
 
-Implements Requirements 10.2, 10.3, 10.4
+Supports multi-modal evaluation with:
+- Numerical and categorical features (baseline)
+- Text encoding with XLM-RoBERTa
+- Graph encoding with GAT
+
+Implements Requirements 13.2
 """
 
 import argparse
@@ -14,7 +19,7 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import torch
 
@@ -115,15 +120,53 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Device to use (cuda/cpu, auto-detect if not specified)"
     )
+    # Multi-modal arguments
+    parser.add_argument(
+        "--modalities",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Enabled modalities (overrides checkpoint config). Options: num, cat, text, graph"
+    )
     return parser.parse_args()
 
 
 def load_model(
     model_path: str,
     config,
-    device: torch.device
+    device: torch.device,
+    modalities_override: Optional[List[str]] = None,
+    logger: Optional[logging.Logger] = None
 ) -> PrototypicalNetwork:
-    """Load pre-trained model from checkpoint."""
+    """Load pre-trained model from checkpoint.
+    
+    Args:
+        model_path: Path to model checkpoint
+        config: Configuration object
+        device: Device to load model on
+        modalities_override: Override modalities from checkpoint
+        logger: Logger instance
+        
+    Returns:
+        Loaded PrototypicalNetwork model
+    """
+    # Load checkpoint to get saved configuration
+    checkpoint = torch.load(model_path, map_location=device)
+    
+    # Get enabled modalities from checkpoint or override
+    if modalities_override:
+        enabled_modalities = modalities_override
+        if logger:
+            logger.info(f"Using override modalities: {', '.join(enabled_modalities)}")
+    elif 'enabled_modalities' in checkpoint:
+        enabled_modalities = checkpoint['enabled_modalities']
+        if logger:
+            logger.info(f"Using checkpoint modalities: {', '.join(enabled_modalities)}")
+    else:
+        enabled_modalities = config.model.enabled_modalities
+        if logger:
+            logger.info(f"Using config modalities: {', '.join(enabled_modalities)}")
+    
     # Create model configuration dict
     model_config = {
         'num_input_dim': config.model.num_input_dim,
@@ -134,20 +177,41 @@ def load_model(
         'cat_output_dim': config.model.cat_output_dim,
         'fusion_output_dim': config.model.fusion_output_dim,
         'fusion_dropout': config.model.fusion_dropout,
+        'fusion_use_attention': config.model.fusion_use_attention,
+        'enabled_modalities': enabled_modalities,
     }
+    
+    # Add text encoder config if text modality is enabled
+    if 'text' in enabled_modalities:
+        model_config.update({
+            'text_model_name': config.model.text_model_name,
+            'text_output_dim': config.model.text_output_dim,
+            'text_max_length': config.model.text_max_length,
+            'text_freeze_backbone': True,  # Always freeze during evaluation
+        })
+    
+    # Add graph encoder config if graph modality is enabled
+    if 'graph' in enabled_modalities:
+        model_config.update({
+            'graph_input_dim': config.model.graph_input_dim,
+            'graph_hidden_dim': config.model.graph_hidden_dim,
+            'graph_output_dim': config.model.graph_output_dim,
+            'graph_num_heads': config.model.graph_num_heads,
+            'graph_num_layers': config.model.graph_num_layers,
+            'graph_dropout': config.model.graph_dropout,
+        })
     
     # Initialize encoder and model
     encoder = MultiModalEncoder(model_config)
     model = PrototypicalNetwork(encoder, distance=config.model.distance_metric)
     
-    # Load checkpoint
-    checkpoint = torch.load(model_path, map_location=device)
+    # Load checkpoint weights
     model.load_state_dict(checkpoint['model_state_dict'])
     
     model = model.to(device)
     model.eval()
     
-    return model
+    return model, enabled_modalities
 
 
 def evaluate_k_shot(
@@ -156,15 +220,16 @@ def evaluate_k_shot(
     k_shot: int,
     n_episodes: int,
     device: torch.device,
-    logger: logging.Logger
+    logger: logging.Logger,
+    enabled_modalities: List[str]
 ) -> Dict[str, float]:
     """Evaluate model with specific K-shot value."""
     # Get indices
     train_indices = dataset.get_split_indices('train')
     test_indices = dataset.get_split_indices('test')
     
-    # Create evaluator
-    evaluator = Evaluator(model)
+    # Create evaluator with modality configuration
+    evaluator = Evaluator(model, enabled_modalities=enabled_modalities)
     
     # Evaluate
     metrics = evaluator.evaluate_with_k_shot(
@@ -223,8 +288,19 @@ def main():
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # Load pre-trained model
-    model = load_model(str(model_path), config, device)
+    # Load pre-trained model with modality configuration
+    model, enabled_modalities = load_model(
+        str(model_path), 
+        config, 
+        device,
+        modalities_override=args.modalities,
+        logger=logger
+    )
+    
+    # Log model info
+    total_params = sum(p.numel() for p in model.parameters())
+    logger.info(f"Model: {total_params:,} params, device={device}")
+    logger.info(f"Modalities: {', '.join(enabled_modalities)}")
     
     # Load target dataset
     dataset = BotDataset(args.dataset, config.data_dir)
@@ -242,7 +318,8 @@ def main():
             k_shot=k_shot,
             n_episodes=args.n_episodes,
             device=device,
-            logger=logger
+            logger=logger,
+            enabled_modalities=enabled_modalities
         )
         results[k_shot] = metrics
     
@@ -254,6 +331,7 @@ def main():
         'dataset': args.dataset,
         'model_path': str(model_path),
         'n_episodes': args.n_episodes,
+        'enabled_modalities': enabled_modalities,
         'results': {str(k): v for k, v in results.items()}
     }
     

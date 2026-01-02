@@ -10,5 +10,9 @@ pyyaml>=6.0
 pytest>=7.0.0
 hypothesis>=6.0.0
 
-# Optional: Graph Neural Networks (for future extensions)
-# torch-geometric>=2.0.0
+# Text Encoding (XLM-RoBERTa)
+transformers>=4.30.0
+sentencepiece
+
+# Graph Neural Networks (GAT for social network encoding)
+torch-geometric>=2.3.0

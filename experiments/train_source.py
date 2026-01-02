@@ -5,7 +5,13 @@ Source Domain Training Script
 Trains a prototypical network on the source domain (Twibot-20) for
 cross-domain bot detection.
 
-Implements Requirements 10.1, 10.3, 10.4
+Supports multi-modal training with:
+- Numerical and categorical features (baseline)
+- Text encoding with XLM-RoBERTa
+- Graph encoding with GAT
+- Ablation experiments with different modality combinations
+
+Implements Requirements 13.1, 13.5
 """
 
 import argparse
@@ -14,6 +20,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import List, Optional
 
 import torch
 
@@ -107,7 +114,54 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Device to use (cuda/cpu, auto-detect if not specified)"
     )
+    # Multi-modal arguments
+    parser.add_argument(
+        "--modalities",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Enabled modalities (overrides config). Options: num, cat, text, graph"
+    )
+    parser.add_argument(
+        "--freeze-text",
+        action="store_true",
+        default=None,
+        help="Freeze text encoder backbone (overrides config)"
+    )
+    parser.add_argument(
+        "--unfreeze-text",
+        action="store_true",
+        default=False,
+        help="Unfreeze text encoder backbone (overrides config)"
+    )
+    parser.add_argument(
+        "--text-lr",
+        type=float,
+        default=None,
+        help="Text encoder learning rate (overrides config)"
+    )
+    # Ablation experiment shortcuts
+    parser.add_argument(
+        "--ablation",
+        type=str,
+        choices=["baseline", "text", "graph", "text_graph", "all"],
+        default=None,
+        help="Ablation experiment preset: baseline (num+cat), text (num+cat+text), "
+             "graph (num+cat+graph), text_graph (num+cat+text+graph), all (same as text_graph)"
+    )
     return parser.parse_args()
+
+
+def get_modalities_from_ablation(ablation: str) -> List[str]:
+    """Get modality list from ablation preset name."""
+    presets = {
+        "baseline": ["num", "cat"],
+        "text": ["num", "cat", "text"],
+        "graph": ["num", "cat", "graph"],
+        "text_graph": ["num", "cat", "text", "graph"],
+        "all": ["num", "cat", "text", "graph"]
+    }
+    return presets.get(ablation, ["num", "cat"])
 
 
 def main():
@@ -125,12 +179,34 @@ def main():
     if args.seed is not None:
         config.seed = args.seed
     
+    # Handle modality configuration
+    if args.ablation:
+        # Ablation preset takes precedence
+        config.model.enabled_modalities = get_modalities_from_ablation(args.ablation)
+    elif args.modalities:
+        # Explicit modality list
+        config.model.enabled_modalities = args.modalities
+    
+    # Handle text backbone freezing
+    if args.unfreeze_text:
+        config.model.text_freeze_backbone = False
+    elif args.freeze_text:
+        config.model.text_freeze_backbone = True
+    
+    # Handle text learning rate
+    if args.text_lr:
+        config.training.text_learning_rate = args.text_lr
+    
     # 自动生成带时间戳的输出目录
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    # Include modality info in output directory name
+    modality_suffix = "_".join(config.model.enabled_modalities)
+    
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
-        output_dir = Path(config.output_dir) / timestamp
+        output_dir = Path(config.output_dir) / f"{timestamp}_{modality_suffix}"
     
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -155,6 +231,10 @@ def main():
                 f"train={len(dataset.get_split_indices('train'))}, "
                 f"val={len(dataset.get_split_indices('val'))})")
     
+    # Log enabled modalities
+    enabled_modalities = config.model.enabled_modalities
+    logger.info(f"Modalities: {', '.join(enabled_modalities)}")
+    
     # Create model configuration dict
     model_config = {
         'num_input_dim': config.model.num_input_dim,
@@ -165,7 +245,33 @@ def main():
         'cat_output_dim': config.model.cat_output_dim,
         'fusion_output_dim': config.model.fusion_output_dim,
         'fusion_dropout': config.model.fusion_dropout,
+        'fusion_use_attention': config.model.fusion_use_attention,
+        'enabled_modalities': enabled_modalities,
     }
+    
+    # Add text encoder config if text modality is enabled
+    if 'text' in enabled_modalities:
+        model_config.update({
+            'text_model_name': config.model.text_model_name,
+            'text_output_dim': config.model.text_output_dim,
+            'text_max_length': config.model.text_max_length,
+            'text_freeze_backbone': config.model.text_freeze_backbone,
+        })
+        logger.info(f"Text encoder: {config.model.text_model_name}, "
+                   f"freeze_backbone={config.model.text_freeze_backbone}")
+    
+    # Add graph encoder config if graph modality is enabled
+    if 'graph' in enabled_modalities:
+        model_config.update({
+            'graph_input_dim': config.model.graph_input_dim,
+            'graph_hidden_dim': config.model.graph_hidden_dim,
+            'graph_output_dim': config.model.graph_output_dim,
+            'graph_num_heads': config.model.graph_num_heads,
+            'graph_num_layers': config.model.graph_num_layers,
+            'graph_dropout': config.model.graph_dropout,
+        })
+        logger.info(f"Graph encoder: {config.model.graph_num_layers} GAT layers, "
+                   f"{config.model.graph_num_heads} heads")
     
     # Initialize encoder and model
     encoder = MultiModalEncoder(model_config)
@@ -174,7 +280,8 @@ def main():
     
     # Log model info
     total_params = sum(p.numel() for p in model.parameters())
-    logger.info(f"Model: {total_params:,} params, device={device}")
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logger.info(f"Model: {total_params:,} params ({trainable_params:,} trainable), device={device}")
     
     # Create trainer configuration dict
     trainer_config = {
@@ -188,6 +295,9 @@ def main():
         'weight_decay': config.training.weight_decay,
         'patience': config.training.patience,
         'output_dir': str(output_dir),
+        'enabled_modalities': enabled_modalities,
+        'text_learning_rate': config.training.text_learning_rate,
+        'text_freeze_backbone': config.model.text_freeze_backbone,
     }
     
     # Initialize trainer
@@ -196,6 +306,9 @@ def main():
     # Log training configuration (简洁版)
     logger.info(f"Config: {config.training.n_way}-way {config.training.k_shot}-shot, "
                 f"lr={config.training.learning_rate}, patience={config.training.patience}")
+    
+    if 'text' in enabled_modalities:
+        logger.info(f"Text LR: {config.training.text_learning_rate}")
     
     # Train model
     logger.info("Training...")

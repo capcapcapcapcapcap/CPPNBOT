@@ -1,0 +1,70 @@
+# Ablation Configuration: All Modalities (Full Model)
+# Uses all available modalities: numerical, categorical, text, and graph
+
+# Model architecture configuration
+model:
+  # Numerical encoder: 5-dim input → 64-dim output
+  # Features: followers, following, tweets, listed_count, account_age_days
+  num_input_dim: 5
+  num_hidden_dim: 32
+  num_output_dim: 64
+  
+  # Categorical encoder: 3 features → 32-dim output
+  # Features: verified, protected, default_avatar
+  cat_num_categories: [2, 2, 2]
+  cat_embedding_dim: 16
+  cat_output_dim: 32
+  
+  # Text encoder (XLM-RoBERTa): text → 256-dim output
+  text_model_name: xlm-roberta-base
+  text_output_dim: 256
+  text_max_length: 512
+  text_freeze_backbone: true  # Freeze backbone during training
+  
+  # Graph encoder (GAT): node features + edges → 128-dim output
+  graph_input_dim: 256  # Input from other encoders
+  graph_hidden_dim: 128
+  graph_output_dim: 128
+  graph_num_heads: 4
+  graph_num_layers: 2
+  graph_dropout: 0.1
+  
+  # Fusion module: (64 + 32 + 256 + 128) → 256-dim output
+  fusion_output_dim: 256
+  fusion_dropout: 0.1
+  fusion_use_attention: true
+  
+  # FULL MODEL: All modalities enabled
+  enabled_modalities: ['num', 'cat', 'text', 'graph']
+  
+  # Distance metric for prototype comparison
+  distance_metric: euclidean
+
+# Training configuration for meta-learning
+training:
+  # Episode configuration (N-way K-shot)
+  n_way: 2
+  k_shot: 10
+  n_query: 15
+  
+  # Episodes per epoch
+  n_episodes_train: 100
+  n_episodes_val: 50
+  
+  # Training parameters
+  n_epochs: 200
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  
+  # Text encoder learning rate (smaller than main learning rate)
+  text_learning_rate: 0.00001
+  
+  # Early stopping
+  patience: 10
+
+# Data paths
+data_dir: processed_data
+output_dir: results/ablation_all
+
+# Reproducibility
+seed: 42
