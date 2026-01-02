@@ -3,20 +3,21 @@
 
 # Model architecture configuration
 model:
-  # Numerical encoder: 3-dim input → 64-dim output
-  # 共有特征: followers, following, tweets
-  num_input_dim: 3
+  # Numerical encoder: 8-dim input → 64-dim output
+  # Features: followers, following, tweets, listed_count, account_age_days,
+  #           followers_following_ratio, username_length, description_length
+  num_input_dim: 8
   num_hidden_dim: 32
   num_output_dim: 64
   
-  # Categorical encoder: 1 feature → 16-dim output
-  # 共有特征: verified
-  cat_num_categories: [2]  # Number of categories per feature
+  # Categorical encoder: 5 features → 32-dim output
+  # Features: verified, protected, default_avatar, has_url, has_location
+  cat_num_categories: [2, 2, 2, 2, 2]  # Number of categories per feature
   cat_embedding_dim: 16
-  cat_output_dim: 16
+  cat_output_dim: 32
   
-  # Fusion module: (64 + 16) → 128-dim output
-  fusion_output_dim: 128
+  # Fusion module: (64 + 32) → 256-dim output
+  fusion_output_dim: 256
   fusion_dropout: 0.1
   
   # Distance metric for prototype comparison

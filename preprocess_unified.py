@@ -4,8 +4,8 @@
 
 输出结构:
     processed_data/{dataset}/
-    ├── num_features.pt    # 数值特征 [N, 5] (已标准化)
-    ├── cat_features.pt    # 分类特征 [N, 3]
+    ├── num_features.pt    # 数值特征 [N, 8] (已标准化)
+    ├── cat_features.pt    # 分类特征 [N, D] (D因数据集而异)
     ├── labels.pt          # 标签 [N] (0=human, 1=bot, -1=未标注)
     ├── train_idx.pt       # 训练集索引
     ├── val_idx.pt         # 验证集索引
@@ -14,6 +14,20 @@
     ├── edge_type.pt       # 边类型 [E]
     ├── user_texts.json    # 用户文本 {idx: {description, tweets}}
     └── metadata.json      # 元数据
+
+数值特征 (8维，统一):
+    0. followers_count      - 粉丝数
+    1. following_count      - 关注数
+    2. tweet_count          - 推文数
+    3. listed_count         - 被列表收录次数 (Misbot填0)
+    4. account_age_days     - 账户年龄天数 (Misbot填0)
+    5. followers_following_ratio - 粉丝/关注比 (防止除0)
+    6. username_length      - 用户名长度
+    7. description_length   - 简介长度 (两个数据集都有)
+
+分类特征 (因数据集而异):
+    Twibot-20 (5维): verified, protected, default_avatar, has_url, has_location
+    Misbot (20维): 原始20维one-hot特征
 
 使用方法:
     python preprocess_unified.py --dataset twibot20
@@ -88,12 +102,12 @@ class BasePreprocessor(ABC):
     
     @abstractmethod
     def extract_numerical_features(self, user_df: pd.DataFrame) -> torch.Tensor:
-        """提取5维数值特征: [followers, following, tweets/listed, username_len, age]"""
+        """提取8维数值特征"""
         pass
     
     @abstractmethod
     def extract_categorical_features(self, user_df: pd.DataFrame) -> torch.Tensor:
-        """提取3维分类特征: [default_avatar, verified, protected]"""
+        """提取5维分类特征"""
         pass
     
     @abstractmethod
@@ -105,6 +119,11 @@ class BasePreprocessor(ABC):
     def extract_user_texts(self, user_df: pd.DataFrame, tweet_df: pd.DataFrame, 
                            uid_to_idx: dict) -> Dict[int, dict]:
         """提取用户文本，返回: {user_idx: {description, tweets}}"""
+        pass
+    
+    @abstractmethod
+    def get_cat_feature_info(self) -> tuple:
+        """返回分类特征信息: (维度, 特征名列表)"""
         pass
     
     def run(self):
@@ -153,7 +172,8 @@ class BasePreprocessor(ABC):
         print(f"  用户文本: {len(user_texts)}")
         
         # 保存元数据
-        self._save_metadata(len(user_df), len(tweet_df), edge_index.shape[1])
+        cat_dim, cat_names = self.get_cat_feature_info()
+        self._save_metadata(len(user_df), len(tweet_df), edge_index.shape[1], cat_dim, cat_names)
         
         print(f"\n完成! 输出: {self.config.output_dir}")
     
@@ -195,17 +215,26 @@ class BasePreprocessor(ABC):
                 features[:, i] = (col - mean) / std
         return features
     
-    def _save_metadata(self, n_users, n_tweets, n_edges):
+    def _save_metadata(self, n_users, n_tweets, n_edges, cat_feature_dim, cat_feature_names):
         """保存元数据"""
         metadata = {
             "dataset": self.config.dataset_name,
             "n_users": n_users,
             "n_tweets": n_tweets,
             "n_edges": n_edges,
-            "num_feature_dim": 5,
-            "num_feature_names": ["followers", "following", "tweets", "listed_count", "account_age_days"],
-            "cat_feature_dim": 3,
-            "cat_feature_names": ["verified", "protected", "default_avatar"],
+            "num_feature_dim": 8,
+            "num_feature_names": [
+                "followers_count",
+                "following_count", 
+                "tweet_count",
+                "listed_count",
+                "account_age_days",
+                "followers_following_ratio",
+                "username_length",
+                "description_length"
+            ],
+            "cat_feature_dim": cat_feature_dim,
+            "cat_feature_names": cat_feature_names,
             "processed_time": dt.now().isoformat()
         }
         with open(self.config.output_dir / "metadata.json", 'w') as f:
@@ -217,14 +246,19 @@ class BasePreprocessor(ABC):
 class Twibot20Preprocessor(BasePreprocessor):
     """Twibot-20数据集预处理器 - 低内存版本"""
     
+    def get_cat_feature_info(self) -> tuple:
+        """返回分类特征信息"""
+        return 5, ["verified", "protected", "default_avatar", "has_url", "has_location"]
+    
     def load_data(self):
         """流式加载Twibot-20数据 (只加载用户，推文延迟加载)"""
         print("  流式加载node.json (只加载用户)...")
         
         users = []
         self._tweet_ids = []  # 只存ID，不存内容
-        user_fields = ['id', 'username', 'description', 'created_at', 
-                       'public_metrics', 'profile_image_url', 'verified', 'protected']
+        user_fields = ['id', 'username', 'name', 'description', 'created_at', 
+                       'public_metrics', 'profile_image_url', 'verified', 'protected',
+                       'url', 'location']
         
         for node_id, node_data in StreamingJsonLoader.iter_json_objects(
             self.config.input_dir / "node.json", "解析节点"
@@ -255,7 +289,7 @@ class Twibot20Preprocessor(BasePreprocessor):
         return user_df, tweet_df, labels, splits
     
     def extract_numerical_features(self, user_df: pd.DataFrame) -> torch.Tensor:
-        """提取5维数值特征: [followers, following, tweets, listed_count, account_age_days]"""
+        """提取8维数值特征"""
         features = []
         reference_date = dt(2020, 9, 1)
         
@@ -283,13 +317,21 @@ class Twibot20Preprocessor(BasePreprocessor):
                     age = 0
             except:
                 age = 0
+            # 6. followers_following_ratio (防止除0)
+            ratio = followers / (following + 1)
+            # 7. username_length
+            username = row.get('username', '') or ''
+            username_len = len(username)
+            # 8. description_length
+            description = row.get('description', '') or ''
+            desc_len = len(description)
             
-            features.append([followers, following, tweets, listed, age])
+            features.append([followers, following, tweets, listed, age, ratio, username_len, desc_len])
         
         return torch.tensor(features, dtype=torch.float32)
     
     def extract_categorical_features(self, user_df: pd.DataFrame) -> torch.Tensor:
-        """提取3维分类特征: [verified, protected, default_avatar]"""
+        """提取5维分类特征: [verified, protected, default_avatar, has_url, has_location]"""
         features = []
         default_avatar_url = 'http://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png'
         
@@ -301,8 +343,14 @@ class Twibot20Preprocessor(BasePreprocessor):
             # 3. default_avatar
             img_url = row.get('profile_image_url', '') or ''
             default_avatar = 1 if img_url.strip() == default_avatar_url else 0
+            # 4. has_url
+            url = row.get('url', '') or ''
+            has_url = 1 if url.strip() else 0
+            # 5. has_location
+            location = row.get('location', '') or ''
+            has_location = 1 if location.strip() else 0
             
-            features.append([verified, protected, default_avatar])
+            features.append([verified, protected, default_avatar, has_url, has_location])
         
         return torch.tensor(features, dtype=torch.float32)
     
@@ -406,6 +454,10 @@ class Twibot20Preprocessor(BasePreprocessor):
 class MisbotPreprocessor(BasePreprocessor):
     """Misbot数据集预处理器"""
     
+    def get_cat_feature_info(self) -> tuple:
+        """返回分类特征信息"""
+        return 20, [f"cat_{i}" for i in range(20)]
+    
     def load_data(self):
         """加载Misbot数据"""
         print("  加载node.json (字典格式)...")
@@ -448,42 +500,58 @@ class MisbotPreprocessor(BasePreprocessor):
         return user_df, tweet_df, labels, splits
     
     def extract_numerical_features(self, user_df: pd.DataFrame) -> torch.Tensor:
-        """提取5维数值特征: [followers, following, tweets, 0, 0] (Misbot缺少listed_count和account_age)"""
+        """提取8维数值特征 (Misbot缺少部分特征，填0)"""
         features = []
         
         for _, row in user_df.iterrows():
             profile = row.get('profile', {}) or {}
             numerical = profile.get('numerical', [0, 0, 0])
+            description = profile.get('description', '') or ''
             
             if len(numerical) >= 3:
                 # Misbot numerical: [followers, following, tweets]
-                # 对齐到5维: [followers, following, tweets, 0, 0]
                 followers = numerical[0] if numerical[0] is not None else 0
                 following = numerical[1] if numerical[1] is not None else 0
                 tweets = numerical[2] if numerical[2] is not None else 0
-                features.append([followers, following, tweets, 0, 0])
             else:
-                features.append([0, 0, 0, 0, 0])
+                followers, following, tweets = 0, 0, 0
+            
+            # 1. followers_count
+            # 2. following_count
+            # 3. tweet_count
+            # 4. listed_count (Misbot没有，填0)
+            listed = 0
+            # 5. account_age_days (Misbot没有，填0)
+            age = 0
+            # 6. followers_following_ratio (防止除0)
+            ratio = followers / (following + 1)
+            # 7. username_length (从ID提取，去掉前缀)
+            uid = row.get('id', '') or ''
+            # 去掉 "train_u" 或类似前缀
+            username_len = len(uid.replace('train_', '').replace('test_', '').replace('dev_', ''))
+            # 8. description_length (两个数据集都有)
+            desc_len = len(description)
+            
+            features.append([followers, following, tweets, listed, age, ratio, username_len, desc_len])
         
         return torch.tensor(features, dtype=torch.float32)
     
     def extract_categorical_features(self, user_df: pd.DataFrame) -> torch.Tensor:
-        """提取3维分类特征 (取Misbot 20维one-hot的前3维)"""
+        """提取20维分类特征 (保留Misbot完整的categorical向量)"""
         features = []
         
         for _, row in user_df.iterrows():
             profile = row.get('profile', {}) or {}
             categorical = profile.get('categorical', [])
             
-            # Misbot的categorical是20维one-hot向量，取前3维
-            if len(categorical) >= 3:
-                # 确保值为0或1的整数
-                feat = [int(categorical[i]) if categorical[i] is not None else 0 for i in range(3)]
-                features.append(feat)
+            # Misbot的categorical是20维one-hot向量，全部保留
+            if len(categorical) >= 20:
+                feat = [int(categorical[i]) if categorical[i] is not None else 0 for i in range(20)]
             else:
-                # 如果不足3维，用0填充
-                feat = [int(categorical[i]) if i < len(categorical) and categorical[i] is not None else 0 for i in range(3)]
-                features.append(feat)
+                # 如果不足20维，用0填充
+                feat = [int(categorical[i]) if i < len(categorical) and categorical[i] is not None else 0 for i in range(20)]
+            
+            features.append(feat)
         
         return torch.tensor(features, dtype=torch.float32)
     
