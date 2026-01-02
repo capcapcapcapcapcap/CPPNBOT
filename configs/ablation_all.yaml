@@ -3,15 +3,16 @@
 
 # Model architecture configuration
 model:
-  # Numerical encoder: 5-dim input → 64-dim output
-  # Features: followers, following, tweets, listed_count, account_age_days
-  num_input_dim: 5
+  # Numerical encoder: 8-dim input → 64-dim output
+  # Features: followers_count, following_count, tweet_count, listed_count,
+  #           account_age_days, followers_following_ratio, username_length, description_length
+  num_input_dim: 8
   num_hidden_dim: 32
   num_output_dim: 64
   
-  # Categorical encoder: 3 features → 32-dim output
-  # Features: verified, protected, default_avatar
-  cat_num_categories: [2, 2, 2]
+  # Categorical encoder: 5 features → 32-dim output
+  # Features: verified, protected, default_avatar, has_url, has_location
+  cat_num_categories: [2, 2, 2, 2, 2]
   cat_embedding_dim: 16
   cat_output_dim: 32
   

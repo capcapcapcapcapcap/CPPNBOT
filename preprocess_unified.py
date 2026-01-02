@@ -456,7 +456,8 @@ class MisbotPreprocessor(BasePreprocessor):
     
     def get_cat_feature_info(self) -> tuple:
         """返回分类特征信息"""
-        return 20, [f"cat_{i}" for i in range(20)]
+        # 对齐到Twibot-20的5维，取前5维
+        return 5, ["cat_0", "cat_1", "cat_2", "cat_3", "cat_4"]
     
     def load_data(self):
         """加载Misbot数据"""
@@ -537,19 +538,19 @@ class MisbotPreprocessor(BasePreprocessor):
         return torch.tensor(features, dtype=torch.float32)
     
     def extract_categorical_features(self, user_df: pd.DataFrame) -> torch.Tensor:
-        """提取20维分类特征 (保留Misbot完整的categorical向量)"""
+        """提取5维分类特征 (对齐到Twibot-20的维度，取前5维)"""
         features = []
         
         for _, row in user_df.iterrows():
             profile = row.get('profile', {}) or {}
             categorical = profile.get('categorical', [])
             
-            # Misbot的categorical是20维one-hot向量，全部保留
-            if len(categorical) >= 20:
-                feat = [int(categorical[i]) if categorical[i] is not None else 0 for i in range(20)]
+            # 取前5维，对齐到Twibot-20
+            if len(categorical) >= 5:
+                feat = [int(categorical[i]) if categorical[i] is not None else 0 for i in range(5)]
             else:
-                # 如果不足20维，用0填充
-                feat = [int(categorical[i]) if i < len(categorical) and categorical[i] is not None else 0 for i in range(20)]
+                # 如果不足5维，用0填充
+                feat = [int(categorical[i]) if i < len(categorical) and categorical[i] is not None else 0 for i in range(5)]
             
             features.append(feat)
         

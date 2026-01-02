@@ -26,15 +26,15 @@ class ModelConfig:
     """
     
     # Numerical encoder
-    num_input_dim: int = 5
+    num_input_dim: int = 8
     num_hidden_dim: int = 32
     num_output_dim: int = 64
     
     # Categorical encoder
     # 可以是 List[int] (嵌入模式) 或 int (线性模式)
-    # Twibot-20: [2, 2, 2] (3个二值特征)
-    # Misbot: [2, 2, 2] (前3维)
-    cat_num_categories: List[int] = field(default_factory=lambda: [2, 2, 2])
+    # Twibot-20: [2, 2, 2, 2, 2] (5个二值特征)
+    # Misbot: 需要对齐到5维
+    cat_num_categories: List[int] = field(default_factory=lambda: [2, 2, 2, 2, 2])
     cat_embedding_dim: int = 16
     cat_output_dim: int = 32
     
@@ -181,10 +181,10 @@ class Config:
 def _dict_to_model_config(d: dict) -> ModelConfig:
     """Convert dictionary to ModelConfig."""
     return ModelConfig(
-        num_input_dim=d.get('num_input_dim', 5),
+        num_input_dim=d.get('num_input_dim', 8),
         num_hidden_dim=d.get('num_hidden_dim', 32),
         num_output_dim=d.get('num_output_dim', 64),
-        cat_num_categories=d.get('cat_num_categories', [2, 2, 2]),
+        cat_num_categories=d.get('cat_num_categories', [2, 2, 2, 2, 2]),
         cat_embedding_dim=d.get('cat_embedding_dim', 16),
         cat_output_dim=d.get('cat_output_dim', 32),
         text_model_name=d.get('text_model_name', 'xlm-roberta-base'),
