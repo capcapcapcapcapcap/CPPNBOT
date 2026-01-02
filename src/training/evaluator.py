@@ -5,7 +5,7 @@ Implements Requirements 11.1, 11.2, 11.3, 11.4
 
 Supports multi-modal evaluation with:
 - Text data: online encoding or precomputed embeddings (faster)
-- Graph data loading and passing
+- Graph data: precomputed embeddings (required for cross-domain evaluation)
 - Few-shot evaluation with different K-shot values
 """
 
@@ -28,7 +28,7 @@ class Evaluator:
     
     Multi-modal support:
     - Text data: online encoding or precomputed embeddings
-    - Graph data loading and encoding
+    - Graph data: precomputed embeddings (在线编码需要完整图结构，跨域评估时不可用)
     """
     
     def __init__(
@@ -59,8 +59,7 @@ class Evaluator:
         # Cache for text and graph data
         self._user_texts: Optional[Dict[int, str]] = None
         self._precomputed_text_embeddings: Optional[torch.Tensor] = None
-        self._edge_index: Optional[torch.Tensor] = None
-        self._edge_type: Optional[torch.Tensor] = None
+        self._precomputed_graph_embeddings: Optional[torch.Tensor] = None
     
     def set_dataset_data(
         self,
@@ -87,10 +86,28 @@ class Evaluator:
                     self._user_texts = None
                     self.use_text = False
         
-        # Load graph data if graph modality is enabled
+        # Load precomputed graph embeddings if graph modality is enabled
+        # 注意：图编码需要完整图结构，跨域评估时必须使用预计算嵌入
         if self.use_graph:
-            self._edge_index = dataset.edge_index.to(self.device)
-            self._edge_type = dataset.edge_type.to(self.device)
+            if dataset.has_precomputed_graph_embeddings():
+                try:
+                    self._precomputed_graph_embeddings = dataset.get_graph_embeddings().to(self.device)
+                except FileNotFoundError:
+                    self._precomputed_graph_embeddings = None
+                    self.use_graph = False
+                    import logging
+                    logging.warning(
+                        f"Graph embeddings not found for {dataset.dataset_name}. "
+                        f"Run: python precompute_graph_embeddings.py --dataset {dataset.dataset_name}"
+                    )
+            else:
+                self._precomputed_graph_embeddings = None
+                self.use_graph = False
+                import logging
+                logging.warning(
+                    f"Graph modality enabled but no precomputed embeddings found. "
+                    f"Disabling graph modality for evaluation."
+                )
     
     def _get_texts_for_indices(self, indices: torch.Tensor) -> Optional[List[str]]:
         """Get text data for given sample indices (for online encoding mode).
@@ -140,6 +157,19 @@ class Evaluator:
             return None
         
         return self._precomputed_text_embeddings[indices]
+    
+    def _get_graph_embeddings_for_indices(
+        self, 
+        indices: torch.Tensor
+    ) -> Optional[torch.Tensor]:
+        """Get precomputed graph embeddings for given sample indices.
+        
+        Returns None if graph modality is disabled or embeddings not available.
+        """
+        if not self.use_graph or self._precomputed_graph_embeddings is None:
+            return None
+        
+        return self._precomputed_graph_embeddings[indices]
     
     def _move_to_device(self, data: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Move data dictionary to the model's device."""
@@ -221,7 +251,7 @@ class Evaluator:
         # Load dataset data if not already loaded
         if self.use_text and self._user_texts is None and self._precomputed_text_embeddings is None:
             self.set_dataset_data(test_dataset)
-        if self.use_graph and self._edge_index is None:
+        if self.use_graph and self._precomputed_graph_embeddings is None:
             self.set_dataset_data(test_dataset)
         
         # Move support set to device
@@ -266,9 +296,14 @@ class Evaluator:
             else:
                 query_texts = self._get_texts_for_indices(test_idx_tensor)
         
-        # Get graph data
-        edge_index = self._edge_index if self.use_graph else None
-        edge_type = self._edge_type if self.use_graph else None
+        # Get graph embeddings (precomputed)
+        support_graph_embeddings = None
+        query_graph_embeddings = None
+        if self.use_graph and support_indices is not None:
+            support_graph_embeddings = self._get_graph_embeddings_for_indices(support_indices)
+        if self.use_graph:
+            test_idx_tensor = torch.tensor(test_idx_list)
+            query_graph_embeddings = self._get_graph_embeddings_for_indices(test_idx_tensor)
         
         # Forward pass with frozen encoder
         with torch.no_grad():
@@ -279,8 +314,8 @@ class Evaluator:
                 query_texts=query_texts,
                 support_text_embeddings=support_text_embeddings,
                 query_text_embeddings=query_text_embeddings,
-                edge_index=edge_index,
-                edge_type=edge_type
+                support_graph_embeddings=support_graph_embeddings,
+                query_graph_embeddings=query_graph_embeddings,
             )
             log_probs = output['log_probs']
             predictions = log_probs.argmax(dim=1)

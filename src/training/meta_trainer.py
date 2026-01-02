@@ -648,8 +648,7 @@ class MetaTrainer:
             mode='min', 
             factor=0.5,      # 每次降低50%
             patience=5,      # 5个epoch无改善则降低
-            min_lr=1e-6,
-            verbose=False
+                min_lr=1e-6
         )
         
         # Log training configuration
