@@ -1,6 +1,6 @@
 """Multi-modal encoder combining numerical, categorical, and fusion modules."""
 
-from typing import Dict, List
+from typing import Dict, List, Union
 
 import torch
 import torch.nn as nn
@@ -15,16 +15,20 @@ class MultiModalEncoder(nn.Module):
     
     Combines NumericalEncoder, CategoricalEncoder, and FusionModule
     to produce unified user embeddings.
+    
+    支持不同数据集的分类特征维度:
+    - Twibot-20: 5维二值特征 (嵌入模式)
+    - Misbot: 20维one-hot特征 (线性模式)
     """
     
     def __init__(self, config: Dict):
         """
         Args:
             config: Configuration dictionary with keys:
-                - num_input_dim: Numerical input dimension (default: 5)
+                - num_input_dim: Numerical input dimension (default: 8)
                 - num_hidden_dim: Numerical hidden dimension (default: 32)
                 - num_output_dim: Numerical output dimension (default: 64)
-                - cat_num_categories: List of category counts (default: [2, 2, 2])
+                - cat_num_categories: List[int] for embedding mode, or int for linear mode
                 - cat_embedding_dim: Categorical embedding dimension (default: 16)
                 - cat_output_dim: Categorical output dimension (default: 32)
                 - fusion_output_dim: Fusion output dimension (default: 256)
@@ -33,11 +37,11 @@ class MultiModalEncoder(nn.Module):
         super().__init__()
         
         # Extract config with defaults
-        num_input_dim = config.get('num_input_dim', 5)
+        num_input_dim = config.get('num_input_dim', 8)
         num_hidden_dim = config.get('num_hidden_dim', 32)
         num_output_dim = config.get('num_output_dim', 64)
         
-        cat_num_categories = config.get('cat_num_categories', [2, 2, 2])
+        cat_num_categories = config.get('cat_num_categories', [2, 2, 2, 2, 2])
         cat_embedding_dim = config.get('cat_embedding_dim', 16)
         cat_output_dim = config.get('cat_output_dim', 32)
         
@@ -73,7 +77,7 @@ class MultiModalEncoder(nn.Module):
         Args:
             batch: Dictionary containing:
                 - 'num_features': Tensor[batch, num_input_dim]
-                - 'cat_features': Tensor[batch, num_cat_features]
+                - 'cat_features': Tensor[batch, cat_input_dim]
                 
         Returns:
             Tensor[batch, fusion_output_dim] user embeddings
