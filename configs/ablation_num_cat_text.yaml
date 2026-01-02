@@ -60,5 +60,5 @@ training:
 data_dir: processed_data
 output_dir: results/ablation_num_cat_text
 
-# Reproducibility
-seed: 42
+# Reproducibility (null = random seed each run)
+seed: null
