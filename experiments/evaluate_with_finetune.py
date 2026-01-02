@@ -93,7 +93,7 @@ def load_model(model_path: str, config, device: torch.device):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="带微调的跨域评估")
-    parser.add_argument("--config", "-c", type=str, default="configs/default.yaml")
+    parser.add_argument("--config", "-c", type=str, default="configs/ablation_all.yaml")
     parser.add_argument("--model-path", "-m", type=str, required=True, help="模型路径")
     parser.add_argument("--dataset", type=str, default="misbot", help="目标数据集")
     parser.add_argument("--k-shots", type=int, nargs="+", default=[1, 5, 10, 20])

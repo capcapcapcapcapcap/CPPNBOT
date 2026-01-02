@@ -74,7 +74,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config", "-c",
         type=str,
-        default="configs/default.yaml",
+        default="configs/ablation_all.yaml",
         help="Path to configuration file"
     )
     parser.add_argument(
