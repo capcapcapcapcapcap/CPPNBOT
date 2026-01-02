@@ -276,7 +276,13 @@ def main():
     
     # Initialize encoder and model
     encoder = MultiModalEncoder(model_config)
-    model = PrototypicalNetwork(encoder, distance=config.model.distance_metric)
+    model = PrototypicalNetwork(
+        encoder, 
+        distance=config.model.distance_metric,
+        temperature=config.model.proto_temperature,
+        learn_temperature=config.model.proto_learn_temperature,
+        normalize_features=config.model.proto_normalize_features
+    )
     model = model.to(device)
     
     # Log model info

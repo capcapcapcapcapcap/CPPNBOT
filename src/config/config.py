@@ -65,6 +65,11 @@ class ModelConfig:
     # Distance metric
     distance_metric: str = 'euclidean'
     
+    # Prototypical network parameters
+    proto_temperature: float = 1.0
+    proto_learn_temperature: bool = True
+    proto_normalize_features: bool = False
+    
     def __post_init__(self):
         """Validate model configuration parameters."""
         if self.num_input_dim <= 0:
@@ -97,8 +102,8 @@ class ModelConfig:
             raise ValueError(f"fusion_output_dim must be positive, got {self.fusion_output_dim}")
         if not 0.0 <= self.fusion_dropout < 1.0:
             raise ValueError(f"fusion_dropout must be in [0, 1), got {self.fusion_dropout}")
-        if self.distance_metric not in ('euclidean', 'cosine'):
-            raise ValueError(f"distance_metric must be 'euclidean' or 'cosine', got {self.distance_metric}")
+        if self.distance_metric not in ('euclidean', 'cosine', 'scaled_dot'):
+            raise ValueError(f"distance_metric must be 'euclidean', 'cosine', or 'scaled_dot', got {self.distance_metric}")
         if not self.cat_num_categories or any(n <= 0 for n in self.cat_num_categories):
             raise ValueError(f"cat_num_categories must be non-empty with positive values, got {self.cat_num_categories}")
         
@@ -206,6 +211,9 @@ def _dict_to_model_config(d: dict) -> ModelConfig:
         fusion_use_attention=d.get('fusion_use_attention', True),
         enabled_modalities=d.get('enabled_modalities', ['num', 'cat']),
         distance_metric=d.get('distance_metric', 'euclidean'),
+        proto_temperature=d.get('proto_temperature', 1.0),
+        proto_learn_temperature=d.get('proto_learn_temperature', True),
+        proto_normalize_features=d.get('proto_normalize_features', False),
     )
 
 

@@ -14,26 +14,50 @@ class PrototypicalNetwork(nn.Module):
     Computes class prototypes from support samples and classifies query samples
     based on distance to prototypes.
     
+    改进:
+    1. 可学习的温度参数控制softmax锐度
+    2. 支持缩放点积距离（更适合高维空间）
+    3. 特征归一化选项
+    
     Supports multi-modal data including text and graph features.
     """
     
     def __init__(
         self,
         encoder: nn.Module,
-        distance: str = 'euclidean'
+        distance: str = 'euclidean',
+        temperature: float = 1.0,
+        learn_temperature: bool = True,
+        normalize_features: bool = False
     ):
         """
         Args:
             encoder: Feature encoder module (e.g., MultiModalEncoder)
-            distance: Distance metric - 'euclidean' or 'cosine'
+            distance: Distance metric - 'euclidean', 'cosine', or 'scaled_dot'
+            temperature: Initial temperature for softmax scaling
+            learn_temperature: Whether to learn temperature parameter
+            normalize_features: Whether to L2-normalize features before distance computation
         """
         super().__init__()
         
-        if distance not in ('euclidean', 'cosine'):
+        if distance not in ('euclidean', 'cosine', 'scaled_dot'):
             raise ValueError(f"Unknown distance metric: {distance}")
         
         self.encoder = encoder
         self.distance = distance
+        self.normalize_features = normalize_features
+        
+        # 可学习的温度参数
+        if learn_temperature:
+            # 使用log scale确保温度始终为正
+            self.log_temperature = nn.Parameter(torch.tensor(temperature).log())
+        else:
+            self.register_buffer('log_temperature', torch.tensor(temperature).log())
+    
+    @property
+    def temperature(self) -> torch.Tensor:
+        """获取当前温度值"""
+        return self.log_temperature.exp()
     
     def compute_prototypes(
         self,
@@ -86,20 +110,29 @@ class PrototypicalNetwork(nn.Module):
         Returns:
             Tensor[n_query, n_classes] distances (lower = closer)
         """
+        # 可选的特征归一化
+        if self.normalize_features:
+            query_features = F.normalize(query_features, p=2, dim=1)
+            prototypes = F.normalize(prototypes, p=2, dim=1)
+        
         if self.distance == 'euclidean':
             # Euclidean distance: ||q - p||^2
-            # Expand dims for broadcasting: [n_query, 1, embed_dim] - [1, n_classes, embed_dim]
             diff = query_features.unsqueeze(1) - prototypes.unsqueeze(0)
             distances = (diff ** 2).sum(dim=2)
-        else:  # cosine
+            
+        elif self.distance == 'cosine':
             # Cosine distance: 1 - cosine_similarity
-            # Normalize features
             query_norm = F.normalize(query_features, p=2, dim=1)
             proto_norm = F.normalize(prototypes, p=2, dim=1)
-            # Cosine similarity: [n_query, n_classes]
             similarity = torch.mm(query_norm, proto_norm.t())
-            # Convert to distance (1 - similarity)
             distances = 1 - similarity
+            
+        else:  # scaled_dot
+            # Scaled dot product (like attention): -q·p / sqrt(d)
+            # 负号是因为我们需要距离（越小越好）
+            embed_dim = query_features.size(1)
+            similarity = torch.mm(query_features, prototypes.t()) / (embed_dim ** 0.5)
+            distances = -similarity
         
         return distances
 
@@ -149,6 +182,7 @@ class PrototypicalNetwork(nn.Module):
                 - 'log_probs': Tensor[n_query, n_classes] log probabilities
                 - 'prototypes': Tensor[n_classes, embed_dim] class prototypes
                 - 'query_embeddings': Tensor[n_query, embed_dim] query embeddings
+                - 'temperature': Current temperature value
         """
         # Check if encoder supports multi-modal data
         encoder_supports_multimodal = hasattr(self.encoder, 'text_encoder') or hasattr(self.encoder, 'enabled_modalities')
@@ -200,14 +234,15 @@ class PrototypicalNetwork(nn.Module):
         # Compute distances
         distances = self._compute_distances(query_features, prototypes)
         
-        # Convert distances to log probabilities
-        # Closer distance = higher probability, so use negative distances
-        log_probs = F.log_softmax(-distances, dim=1)
+        # Convert distances to log probabilities with temperature scaling
+        # 温度越高，分布越平坦；温度越低，分布越尖锐
+        log_probs = F.log_softmax(-distances / self.temperature, dim=1)
         
         return {
             'log_probs': log_probs,
             'prototypes': prototypes,
-            'query_embeddings': query_features
+            'query_embeddings': query_features,
+            'temperature': self.temperature.item()
         }
     
     def classify(
