@@ -216,6 +216,9 @@ class MetaTrainer:
         text_learning_rate = config.get('text_learning_rate', 1e-5)
         weight_decay = config.get('weight_decay', 1e-4)
         
+        # 保存学习率用于调度器
+        self.base_lr = learning_rate
+        
         # Check if model has text encoder with separate parameters
         if self.use_text and hasattr(self.model.encoder, 'text_encoder') and self.model.encoder.text_encoder is not None:
             # Separate parameters for text encoder
@@ -482,6 +485,9 @@ class MetaTrainer:
             # Backward pass
             loss.backward()
             
+            # Gradient clipping to stabilize training
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            
             # Update weights
             self.optimizer.step()
             
@@ -636,6 +642,16 @@ class MetaTrainer:
             'val_recall': [], 'val_f1': []
         }
         
+        # 学习率调度器: ReduceLROnPlateau - 当验证loss停滞时降低学习率
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer, 
+            mode='min', 
+            factor=0.5,      # 每次降低50%
+            patience=5,      # 5个epoch无改善则降低
+            min_lr=1e-6,
+            verbose=False
+        )
+        
         # Log training configuration
         modality_str = ', '.join(self.enabled_modalities)
         logger.info(f"Training: {n_epochs} epochs, {self.n_episodes_train} episodes/epoch")
@@ -654,14 +670,21 @@ class MetaTrainer:
             for k, v in val_metrics.items():
                 history[f'val_{k}'].append(v)
             
+            # 更新学习率调度器
+            scheduler.step(val_metrics['loss'])
+            
+            # 获取当前学习率
+            current_lr = self.optimizer.param_groups[0]['lr']
+            
             # Log progress
             improved = val_metrics['loss'] < self.best_val_loss
             marker = " *" if improved else ""
+            lr_info = f" lr={current_lr:.1e}" if current_lr < self.base_lr else ""
             logger.info(
                 f"Epoch {self.current_epoch:3d}/{n_epochs} | "
                 f"Loss: {train_metrics['loss']:.4f}/{val_metrics['loss']:.4f} | "
                 f"Acc: {train_metrics['accuracy']:.4f}/{val_metrics['accuracy']:.4f} | "
-                f"F1: {train_metrics['f1']:.4f}/{val_metrics['f1']:.4f}{marker}"
+                f"F1: {train_metrics['f1']:.4f}/{val_metrics['f1']:.4f}{marker}{lr_info}"
             )
             
             # Check for improvement
