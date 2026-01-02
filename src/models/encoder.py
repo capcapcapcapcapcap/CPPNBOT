@@ -23,8 +23,12 @@ class MultiModalEncoder(nn.Module):
     支持可配置的模态组合:
     - num: 数值特征编码器
     - cat: 分类特征编码器
-    - text: 文本编码器 (XLM-RoBERTa)
-    - graph: 图编码器 (GAT)
+    - text: 文本编码器 (XLM-RoBERTa) 或预计算嵌入
+    - graph: 图编码器 (RGCN)
+    
+    文本模态支持两种模式:
+    1. 在线编码: 使用 TextEncoder 实时编码文本
+    2. 预计算嵌入: 直接使用预计算的嵌入向量 (更快)
     
     Requirements:
         - 8.1: Output 256-dimensional fused representation
@@ -43,8 +47,9 @@ class MultiModalEncoder(nn.Module):
                 - cat_output_dim: Categorical output dimension (default: 32)
                 - text_model_name: Pretrained model name (default: xlm-roberta-base)
                 - text_output_dim: Text output dimension (default: 256)
-                - text_max_length: Max token length (default: 512)
+                - text_max_length: Max token length (default: 128)
                 - text_freeze_backbone: Whether to freeze text backbone (default: True)
+                - use_precomputed_text_embeddings: Use precomputed embeddings (default: True)
                 - graph_input_dim: Graph input dimension (default: 256)
                 - graph_hidden_dim: Graph hidden dimension (default: 128)
                 - graph_output_dim: Graph output dimension (default: 128)
@@ -63,6 +68,9 @@ class MultiModalEncoder(nn.Module):
         
         # Extract enabled modalities
         self.enabled_modalities = config.get('enabled_modalities', ['num', 'cat'])
+        
+        # Text embedding mode
+        self.use_precomputed_text_embeddings = config.get('use_precomputed_text_embeddings', True)
         
         # Extract config with defaults
         num_input_dim = config.get('num_input_dim', 5)
@@ -95,23 +103,30 @@ class MultiModalEncoder(nn.Module):
                 output_dim=cat_output_dim
             )
         
-        # Initialize text encoder if enabled
+        # Initialize text encoder if enabled (only when not using precomputed embeddings)
         self.text_encoder = None
+        self.text_projection = None  # 用于预计算嵌入的投影层
+        text_output_dim = config.get('text_output_dim', 256)
+        
         if 'text' in self.enabled_modalities:
-            # Lazy import to avoid loading transformers if not needed
-            from .encoders.text import TextEncoder
-            
-            text_model_name = config.get('text_model_name', 'xlm-roberta-base')
-            text_output_dim = config.get('text_output_dim', 256)
-            text_max_length = config.get('text_max_length', 512)
-            text_freeze_backbone = config.get('text_freeze_backbone', True)
-            
-            self.text_encoder = TextEncoder(
-                model_name=text_model_name,
-                output_dim=text_output_dim,
-                max_length=text_max_length,
-                freeze_backbone=text_freeze_backbone
-            )
+            if self.use_precomputed_text_embeddings:
+                # 预计算嵌入模式: 只需要一个可选的投影层
+                # 预计算嵌入已经是 text_output_dim 维度，不需要额外投影
+                pass
+            else:
+                # 在线编码模式: 加载完整的 TextEncoder
+                from .encoders.text import TextEncoder
+                
+                text_model_name = config.get('text_model_name', 'xlm-roberta-base')
+                text_max_length = config.get('text_max_length', 128)
+                text_freeze_backbone = config.get('text_freeze_backbone', True)
+                
+                self.text_encoder = TextEncoder(
+                    model_name=text_model_name,
+                    output_dim=text_output_dim,
+                    max_length=text_max_length,
+                    freeze_backbone=text_freeze_backbone
+                )
         
         # Initialize graph encoder if enabled
         self.graph_encoder = None
@@ -150,13 +165,12 @@ class MultiModalEncoder(nn.Module):
         # Initialize fusion module
         if fusion_use_attention and len(self.enabled_modalities) > 0:
             # Use attention-based fusion for multi-modal
-            text_dim = config.get('text_output_dim', 256) if 'text' in self.enabled_modalities else 256
             graph_dim = config.get('graph_output_dim', 128) if 'graph' in self.enabled_modalities else 128
             
             self.fusion = AttentionFusion(
                 num_dim=num_output_dim,
                 cat_dim=cat_output_dim,
-                text_dim=text_dim,
+                text_dim=text_output_dim,
                 graph_dim=graph_dim,
                 output_dim=fusion_output_dim,
                 dropout=fusion_dropout,
@@ -178,6 +192,7 @@ class MultiModalEncoder(nn.Module):
         self,
         batch: Dict[str, torch.Tensor],
         texts: Optional[List[str]] = None,
+        text_embeddings: Optional[torch.Tensor] = None,
         edge_index: Optional[torch.Tensor] = None,
         edge_type: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
@@ -188,9 +203,14 @@ class MultiModalEncoder(nn.Module):
             batch: Dictionary containing:
                 - 'num_features': Tensor[batch, num_input_dim]
                 - 'cat_features': Tensor[batch, cat_input_dim]
-            texts: List of text strings (optional, for text modality)
+            texts: List of text strings (optional, for online text encoding)
+            text_embeddings: Precomputed text embeddings Tensor[batch, text_dim] (optional)
             edge_index: Graph edge indices (optional, for graph modality)
             edge_type: Edge types (optional, for graph modality)
+            
+        Note:
+            - 如果同时提供 texts 和 text_embeddings，优先使用 text_embeddings
+            - 使用预计算嵌入时不需要加载 TextEncoder，大幅加速训练
                 
         Returns:
             Tensor[batch, fusion_output_dim] user embeddings
@@ -207,9 +227,14 @@ class MultiModalEncoder(nn.Module):
             cat_features = batch['cat_features']
             embeddings['cat'] = self.categorical_encoder(cat_features)
         
-        # Encode text features if enabled
-        if self.text_encoder is not None and texts is not None:
-            embeddings['text'] = self.text_encoder(texts)
+        # Handle text features
+        if 'text' in self.enabled_modalities:
+            if text_embeddings is not None:
+                # 使用预计算的文本嵌入 (优先)
+                embeddings['text'] = text_embeddings
+            elif self.text_encoder is not None and texts is not None:
+                # 使用在线编码
+                embeddings['text'] = self.text_encoder(texts)
         
         # Encode graph features if enabled
         if self.graph_encoder is not None and edge_index is not None:

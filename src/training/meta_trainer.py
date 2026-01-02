@@ -4,7 +4,7 @@ MetaTrainer: 元训练器
 Implements Requirements 10.1, 10.2, 10.3, 10.4, 10.5, 10.6
 
 Supports multi-modal training with:
-- Text data loading and passing
+- Text data loading and passing (online encoding or precomputed embeddings)
 - Graph data loading and passing
 - Selective text backbone freezing
 - Separate learning rates for text encoder
@@ -80,17 +80,35 @@ class MetaTrainer:
         self.enabled_modalities = config.get('enabled_modalities', ['num', 'cat'])
         self.use_text = 'text' in self.enabled_modalities
         self.use_graph = 'graph' in self.enabled_modalities
+        
+        # Text embedding mode: precomputed (fast) or online encoding
+        self.use_precomputed_text_embeddings = config.get('use_precomputed_text_embeddings', True)
+        self._precomputed_text_embeddings: Optional[torch.Tensor] = None
 
         # Load text data if text modality is enabled
         self._user_texts: Optional[Dict[int, str]] = None
         if self.use_text:
-            try:
-                self._user_texts = dataset.get_user_texts()
-                logger.info(f"Loaded {len(self._user_texts)} user texts for text encoding")
-            except FileNotFoundError:
-                logger.warning("User texts not found, disabling text modality")
-                self.use_text = False
-                self.enabled_modalities = [m for m in self.enabled_modalities if m != 'text']
+            if self.use_precomputed_text_embeddings and dataset.has_precomputed_text_embeddings():
+                # 使用预计算的文本嵌入 (推荐，更快)
+                try:
+                    self._precomputed_text_embeddings = dataset.get_text_embeddings()
+                    logger.info(f"Loaded precomputed text embeddings: {self._precomputed_text_embeddings.shape}")
+                except FileNotFoundError as e:
+                    logger.warning(f"Precomputed embeddings not found: {e}")
+                    logger.warning("Falling back to online text encoding (slower)")
+                    self.use_precomputed_text_embeddings = False
+            else:
+                self.use_precomputed_text_embeddings = False
+            
+            # 如果没有预计算嵌入，加载原始文本用于在线编码
+            if not self.use_precomputed_text_embeddings:
+                try:
+                    self._user_texts = dataset.get_user_texts()
+                    logger.info(f"Loaded {len(self._user_texts)} user texts for online encoding")
+                except FileNotFoundError:
+                    logger.warning("User texts not found, disabling text modality")
+                    self.use_text = False
+                    self.enabled_modalities = [m for m in self.enabled_modalities if m != 'text']
         
         # Graph data (loaded from dataset)
         self._edge_index: Optional[torch.Tensor] = None
@@ -109,6 +127,10 @@ class MetaTrainer:
         if self._edge_type is not None:
             self._edge_type = self._edge_type.to(self.device)
         
+        # Move precomputed embeddings to device
+        if self._precomputed_text_embeddings is not None:
+            self._precomputed_text_embeddings = self._precomputed_text_embeddings.to(self.device)
+        
         # Setup optimizer with separate learning rates for text encoder
         self.optimizer = self._setup_optimizer(config)
         
@@ -124,15 +146,16 @@ class MetaTrainer:
         self.epochs_without_improvement = 0
         self.current_epoch = 0
         
-        # Handle text backbone freezing
-        text_freeze_backbone = config.get('text_freeze_backbone', True)
-        if self.use_text and hasattr(model.encoder, 'freeze_text_backbone'):
-            if text_freeze_backbone:
-                model.encoder.freeze_text_backbone()
-                logger.info("Text encoder backbone frozen")
-            else:
-                model.encoder.unfreeze_text_backbone()
-                logger.info("Text encoder backbone unfrozen")
+        # Handle text backbone freezing (only for online encoding mode)
+        if self.use_text and not self.use_precomputed_text_embeddings:
+            text_freeze_backbone = config.get('text_freeze_backbone', True)
+            if hasattr(model.encoder, 'freeze_text_backbone'):
+                if text_freeze_backbone:
+                    model.encoder.freeze_text_backbone()
+                    logger.info("Text encoder backbone frozen")
+                else:
+                    model.encoder.unfreeze_text_backbone()
+                    logger.info("Text encoder backbone unfrozen")
 
     def _setup_optimizer(self, config: Dict) -> optim.Optimizer:
         """Setup optimizer with separate learning rates for text encoder."""
@@ -173,12 +196,14 @@ class MetaTrainer:
         return {k: v.to(self.device) for k, v in data.items()}
     
     def _get_texts_for_indices(self, indices: torch.Tensor) -> Optional[List[str]]:
-        """Get text data for given sample indices.
+        """Get text data for given sample indices (for online encoding mode).
         
         Handles user_texts.json format which contains dictionaries with
         'description' and 'tweets' fields.
+        
+        Returns None if using precomputed embeddings or text modality is disabled.
         """
-        if not self.use_text or self._user_texts is None:
+        if not self.use_text or self.use_precomputed_text_embeddings or self._user_texts is None:
             return None
         
         texts = []
@@ -214,6 +239,21 @@ class MetaTrainer:
         
         # Return full graph - the model will select relevant nodes
         return self._edge_index, self._edge_type
+    
+    def _get_text_embeddings_for_indices(
+        self, 
+        indices: torch.Tensor
+    ) -> Optional[torch.Tensor]:
+        """Get precomputed text embeddings for given sample indices.
+        
+        Returns None if not using precomputed embeddings or text modality is disabled.
+        """
+        if not self.use_text or not self.use_precomputed_text_embeddings:
+            return None
+        if self._precomputed_text_embeddings is None:
+            return None
+        
+        return self._precomputed_text_embeddings[indices]
 
     def _compute_episode_loss(
         self,
@@ -227,13 +267,22 @@ class MetaTrainer:
         support_set = self._move_to_device(support_set)
         query_set = self._move_to_device(query_set)
         
-        # Get text data if enabled
+        # Get text data if enabled (either precomputed embeddings or raw texts)
         support_texts = None
         query_texts = None
+        support_text_embeddings = None
+        query_text_embeddings = None
+        
         if support_indices is not None:
-            support_texts = self._get_texts_for_indices(support_indices)
+            if self.use_precomputed_text_embeddings:
+                support_text_embeddings = self._get_text_embeddings_for_indices(support_indices)
+            else:
+                support_texts = self._get_texts_for_indices(support_indices)
         if query_indices is not None:
-            query_texts = self._get_texts_for_indices(query_indices)
+            if self.use_precomputed_text_embeddings:
+                query_text_embeddings = self._get_text_embeddings_for_indices(query_indices)
+            else:
+                query_texts = self._get_texts_for_indices(query_indices)
         
         # Get graph data if enabled
         edge_index, edge_type = None, None
@@ -248,6 +297,8 @@ class MetaTrainer:
             query_set,
             support_texts=support_texts,
             query_texts=query_texts,
+            support_text_embeddings=support_text_embeddings,
+            query_text_embeddings=query_text_embeddings,
             edge_index=edge_index,
             edge_type=edge_type
         )
@@ -271,13 +322,22 @@ class MetaTrainer:
         support_set = self._move_to_device(support_set)
         query_set = self._move_to_device(query_set)
         
-        # Get text data if enabled
+        # Get text data if enabled (either precomputed embeddings or raw texts)
         support_texts = None
         query_texts = None
+        support_text_embeddings = None
+        query_text_embeddings = None
+        
         if support_indices is not None:
-            support_texts = self._get_texts_for_indices(support_indices)
+            if self.use_precomputed_text_embeddings:
+                support_text_embeddings = self._get_text_embeddings_for_indices(support_indices)
+            else:
+                support_texts = self._get_texts_for_indices(support_indices)
         if query_indices is not None:
-            query_texts = self._get_texts_for_indices(query_indices)
+            if self.use_precomputed_text_embeddings:
+                query_text_embeddings = self._get_text_embeddings_for_indices(query_indices)
+            else:
+                query_texts = self._get_texts_for_indices(query_indices)
         
         # Get graph data if enabled
         edge_index, edge_type = None, None
@@ -293,6 +353,8 @@ class MetaTrainer:
                 query_set,
                 support_texts=support_texts,
                 query_texts=query_texts,
+                support_text_embeddings=support_text_embeddings,
+                query_text_embeddings=query_text_embeddings,
                 edge_index=edge_index,
                 edge_type=edge_type
             )
@@ -391,13 +453,22 @@ class MetaTrainer:
                 support_set = self._move_to_device(support_set)
                 query_set = self._move_to_device(query_set)
                 
-                # Get text data if enabled
+                # Get text data if enabled (either precomputed embeddings or raw texts)
                 support_texts = None
                 query_texts = None
+                support_text_embeddings = None
+                query_text_embeddings = None
+                
                 if support_indices is not None:
-                    support_texts = self._get_texts_for_indices(support_indices)
+                    if self.use_precomputed_text_embeddings:
+                        support_text_embeddings = self._get_text_embeddings_for_indices(support_indices)
+                    else:
+                        support_texts = self._get_texts_for_indices(support_indices)
                 if query_indices is not None:
-                    query_texts = self._get_texts_for_indices(query_indices)
+                    if self.use_precomputed_text_embeddings:
+                        query_text_embeddings = self._get_text_embeddings_for_indices(query_indices)
+                    else:
+                        query_texts = self._get_texts_for_indices(query_indices)
                 
                 # Get graph data if enabled
                 edge_index, edge_type = None, None
@@ -412,6 +483,8 @@ class MetaTrainer:
                     query_set,
                     support_texts=support_texts,
                     query_texts=query_texts,
+                    support_text_embeddings=support_text_embeddings,
+                    query_text_embeddings=query_text_embeddings,
                     edge_index=edge_index,
                     edge_type=edge_type
                 )

@@ -59,7 +59,22 @@ python preprocess_unified.py --dataset twibot20
 python preprocess_unified.py --dataset misbot
 ```
 
-### 3. 训练模型
+### 3. 预计算文本嵌入 (可选但推荐)
+
+如果要使用文本模态，建议预先计算文本嵌入以大幅加速训练：
+
+```bash
+# 预计算所有数据集的文本嵌入
+python precompute_text_embeddings.py --dataset all
+
+# 或单独处理
+python precompute_text_embeddings.py --dataset twibot20 --device cuda
+python precompute_text_embeddings.py --dataset misbot --device cuda
+```
+
+预计算后，训练时会自动使用预计算的嵌入，避免重复的 Transformer 推理。
+
+### 4. 训练模型
 
 ```bash
 # 使用默认配置 (数值+分类特征)
@@ -72,7 +87,7 @@ python experiments/train_source.py --config configs/ablation_all.yaml
 python experiments/train_source.py --epochs 100 --lr 0.0005
 ```
 
-### 4. 跨域评估
+### 5. 跨域评估
 
 ```bash
 # 基本评估

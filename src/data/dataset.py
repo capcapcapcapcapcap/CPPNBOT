@@ -2,18 +2,25 @@
 BotDataset: 加载预处理后的机器人检测数据集
 
 Implements Requirements 1.1, 1.2, 1.3, 1.4
+
+支持预计算的文本嵌入以加速训练。
 """
 
 import json
 import os
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 import torch
 
 
 class BotDataset:
-    """加载预处理后的机器人检测数据集"""
+    """加载预处理后的机器人检测数据集
+    
+    支持两种文本模式:
+    1. 原始文本模式: 加载 user_texts.json，训练时在线编码
+    2. 预计算嵌入模式: 加载 text_embeddings.pt，直接使用预计算的嵌入
+    """
 
     def __init__(self, dataset_name: str, data_dir: str = "processed_data"):
         """
@@ -50,6 +57,10 @@ class BotDataset:
         
         # 缓存用户文本（延迟加载）
         self._user_texts: Optional[Dict[int, str]] = None
+        
+        # 预计算的文本嵌入（延迟加载）
+        self._text_embeddings: Optional[torch.Tensor] = None
+        self._has_precomputed_embeddings = (self.data_path / "text_embeddings.pt").exists()
 
     def _load_tensor(self, filename: str) -> torch.Tensor:
         """
@@ -163,3 +174,43 @@ class BotDataset:
                 return self._user_texts
         except json.JSONDecodeError as e:
             raise json.JSONDecodeError("Invalid metadata format", e.doc, e.pos)
+
+    def has_precomputed_text_embeddings(self) -> bool:
+        """检查是否有预计算的文本嵌入"""
+        return self._has_precomputed_embeddings
+    
+    def get_text_embeddings(self) -> torch.Tensor:
+        """
+        加载预计算的文本嵌入
+        
+        Returns:
+            Tensor[num_users, embed_dim] 预计算的文本嵌入
+            
+        Raises:
+            FileNotFoundError: 当嵌入文件不存在时
+        """
+        if self._text_embeddings is not None:
+            return self._text_embeddings
+        
+        embeddings_path = self.data_path / "text_embeddings.pt"
+        if not embeddings_path.exists():
+            raise FileNotFoundError(
+                f"Precomputed text embeddings not found: {embeddings_path}\n"
+                f"Run: python precompute_text_embeddings.py --dataset {self.dataset_name}"
+            )
+        
+        self._text_embeddings = torch.load(embeddings_path, weights_only=True)
+        return self._text_embeddings
+    
+    def get_text_embeddings_for_indices(self, indices: torch.Tensor) -> torch.Tensor:
+        """
+        获取指定索引的预计算文本嵌入
+        
+        Args:
+            indices: 用户索引张量
+            
+        Returns:
+            Tensor[len(indices), embed_dim] 对应的文本嵌入
+        """
+        embeddings = self.get_text_embeddings()
+        return embeddings[indices]

@@ -19,8 +19,9 @@ model:
   # Text encoder (XLM-RoBERTa): text → 256-dim output
   text_model_name: xlm-roberta-base
   text_output_dim: 256
-  text_max_length: 512
+  text_max_length: 128  # 减小以加速训练 (原512)
   text_freeze_backbone: true  # Freeze backbone during training
+  use_precomputed_text_embeddings: true  # 使用预计算嵌入加速训练
   
   # Graph encoder (RGCN): node features + edges → 128-dim output
   # RGCN原生支持多关系类型，比GAT更适合异构社交网络

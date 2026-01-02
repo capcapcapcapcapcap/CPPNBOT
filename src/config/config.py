@@ -41,8 +41,9 @@ class ModelConfig:
     # Text encoder (XLM-RoBERTa)
     text_model_name: str = "xlm-roberta-base"
     text_output_dim: int = 256
-    text_max_length: int = 512
+    text_max_length: int = 128  # 减小默认值以加速处理
     text_freeze_backbone: bool = True
+    use_precomputed_text_embeddings: bool = True  # 使用预计算的文本嵌入以加速训练
     
     # Graph encoder (RGCN): 原生支持多关系类型的图卷积
     graph_input_dim: int = 256
@@ -190,8 +191,9 @@ def _dict_to_model_config(d: dict) -> ModelConfig:
         cat_output_dim=d.get('cat_output_dim', 32),
         text_model_name=d.get('text_model_name', 'xlm-roberta-base'),
         text_output_dim=d.get('text_output_dim', 256),
-        text_max_length=d.get('text_max_length', 512),
+        text_max_length=d.get('text_max_length', 128),
         text_freeze_backbone=d.get('text_freeze_backbone', True),
+        use_precomputed_text_embeddings=d.get('use_precomputed_text_embeddings', True),
         graph_input_dim=d.get('graph_input_dim', 256),
         graph_hidden_dim=d.get('graph_hidden_dim', 128),
         graph_output_dim=d.get('graph_output_dim', 128),

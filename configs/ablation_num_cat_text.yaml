@@ -19,8 +19,9 @@ model:
   # Text encoder (XLM-RoBERTa): text → 256-dim output
   text_model_name: xlm-roberta-base
   text_output_dim: 256
-  text_max_length: 512
+  text_max_length: 128  # 减小以加速训练
   text_freeze_backbone: true  # Freeze backbone during training
+  use_precomputed_text_embeddings: true  # 使用预计算嵌入加速训练
   
   # Fusion module: (64 + 32 + 256) → 256-dim output
   fusion_output_dim: 256

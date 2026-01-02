@@ -4,7 +4,7 @@ Evaluator: 少样本评估器
 Implements Requirements 11.1, 11.2, 11.3, 11.4
 
 Supports multi-modal evaluation with:
-- Text data loading and passing
+- Text data: online encoding or precomputed embeddings (faster)
 - Graph data loading and passing
 - Few-shot evaluation with different K-shot values
 """
@@ -27,14 +27,15 @@ class Evaluator:
     accuracy, precision, recall, and F1 score.
     
     Multi-modal support:
-    - Text data loading and encoding
+    - Text data: online encoding or precomputed embeddings
     - Graph data loading and encoding
     """
     
     def __init__(
         self, 
         model: PrototypicalNetwork,
-        enabled_modalities: Optional[List[str]] = None
+        enabled_modalities: Optional[List[str]] = None,
+        use_precomputed_text_embeddings: bool = True
     ):
         """
         Initialize the evaluator.
@@ -42,6 +43,7 @@ class Evaluator:
         Args:
             model: PrototypicalNetwork instance (should be pre-trained)
             enabled_modalities: List of enabled modalities (default: ['num', 'cat'])
+            use_precomputed_text_embeddings: Whether to use precomputed embeddings (default: True)
         """
         self.model = model
         
@@ -49,12 +51,14 @@ class Evaluator:
         self.enabled_modalities = enabled_modalities or ['num', 'cat']
         self.use_text = 'text' in self.enabled_modalities
         self.use_graph = 'graph' in self.enabled_modalities
+        self.use_precomputed_text_embeddings = use_precomputed_text_embeddings
         
         # Device
         self.device = next(model.parameters()).device if len(list(model.parameters())) > 0 else torch.device('cpu')
         
         # Cache for text and graph data
         self._user_texts: Optional[Dict[int, str]] = None
+        self._precomputed_text_embeddings: Optional[torch.Tensor] = None
         self._edge_index: Optional[torch.Tensor] = None
         self._edge_type: Optional[torch.Tensor] = None
     
@@ -70,11 +74,18 @@ class Evaluator:
         """
         # Load text data if text modality is enabled
         if self.use_text:
-            try:
-                self._user_texts = dataset.get_user_texts()
-            except FileNotFoundError:
-                self._user_texts = None
-                self.use_text = False
+            if self.use_precomputed_text_embeddings and dataset.has_precomputed_text_embeddings():
+                try:
+                    self._precomputed_text_embeddings = dataset.get_text_embeddings().to(self.device)
+                except FileNotFoundError:
+                    self.use_precomputed_text_embeddings = False
+            
+            if not self.use_precomputed_text_embeddings:
+                try:
+                    self._user_texts = dataset.get_user_texts()
+                except FileNotFoundError:
+                    self._user_texts = None
+                    self.use_text = False
         
         # Load graph data if graph modality is enabled
         if self.use_graph:
@@ -82,12 +93,14 @@ class Evaluator:
             self._edge_type = dataset.edge_type.to(self.device)
     
     def _get_texts_for_indices(self, indices: torch.Tensor) -> Optional[List[str]]:
-        """Get text data for given sample indices.
+        """Get text data for given sample indices (for online encoding mode).
         
         Handles user_texts.json format which contains dictionaries with
         'description' and 'tweets' fields.
+        
+        Returns None if using precomputed embeddings or text modality is disabled.
         """
-        if not self.use_text or self._user_texts is None:
+        if not self.use_text or self.use_precomputed_text_embeddings or self._user_texts is None:
             return None
         
         texts = []
@@ -112,6 +125,21 @@ class Evaluator:
                 texts.append("")
         
         return texts
+    
+    def _get_text_embeddings_for_indices(
+        self, 
+        indices: torch.Tensor
+    ) -> Optional[torch.Tensor]:
+        """Get precomputed text embeddings for given sample indices.
+        
+        Returns None if not using precomputed embeddings or text modality is disabled.
+        """
+        if not self.use_text or not self.use_precomputed_text_embeddings:
+            return None
+        if self._precomputed_text_embeddings is None:
+            return None
+        
+        return self._precomputed_text_embeddings[indices]
     
     def _move_to_device(self, data: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Move data dictionary to the model's device."""
@@ -191,7 +219,7 @@ class Evaluator:
         self.model.eval()
         
         # Load dataset data if not already loaded
-        if self.use_text and self._user_texts is None:
+        if self.use_text and self._user_texts is None and self._precomputed_text_embeddings is None:
             self.set_dataset_data(test_dataset)
         if self.use_graph and self._edge_index is None:
             self.set_dataset_data(test_dataset)
@@ -199,10 +227,14 @@ class Evaluator:
         # Move support set to device
         support_set = self._move_to_device(support_set)
         
-        # Get text data for support set
+        # Get text data for support set (either precomputed embeddings or raw texts)
         support_texts = None
+        support_text_embeddings = None
         if support_indices is not None:
-            support_texts = self._get_texts_for_indices(support_indices)
+            if self.use_precomputed_text_embeddings:
+                support_text_embeddings = self._get_text_embeddings_for_indices(support_indices)
+            else:
+                support_texts = self._get_texts_for_indices(support_indices)
         
         # Collect all test samples
         test_num_features = []
@@ -224,10 +256,15 @@ class Evaluator:
         }
         test_labels = torch.stack(test_labels).to(self.device)
         
-        # Get text data for query set
+        # Get text data for query set (either precomputed embeddings or raw texts)
         query_texts = None
+        query_text_embeddings = None
         if self.use_text:
-            query_texts = self._get_texts_for_indices(torch.tensor(test_idx_list))
+            test_idx_tensor = torch.tensor(test_idx_list)
+            if self.use_precomputed_text_embeddings:
+                query_text_embeddings = self._get_text_embeddings_for_indices(test_idx_tensor)
+            else:
+                query_texts = self._get_texts_for_indices(test_idx_tensor)
         
         # Get graph data
         edge_index = self._edge_index if self.use_graph else None
@@ -240,6 +277,8 @@ class Evaluator:
                 query_set,
                 support_texts=support_texts,
                 query_texts=query_texts,
+                support_text_embeddings=support_text_embeddings,
+                query_text_embeddings=query_text_embeddings,
                 edge_index=edge_index,
                 edge_type=edge_type
             )

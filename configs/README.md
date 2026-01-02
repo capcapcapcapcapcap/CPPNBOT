@@ -30,8 +30,9 @@ model:
   # 文本编码器 (可选)
   text_model_name: xlm-roberta-base
   text_output_dim: 256
-  text_max_length: 512
+  text_max_length: 128      # 减小以加速处理
   text_freeze_backbone: true
+  use_precomputed_text_embeddings: true  # 使用预计算嵌入加速训练
   
   # 图编码器 (RGCN，可选)
   graph_input_dim: 256
@@ -143,14 +144,38 @@ model:
   # 基线
   enabled_modalities: ['num', 'cat']
   
-  # 加文本
+  # 加文本 (使用预计算嵌入)
   enabled_modalities: ['num', 'cat', 'text']
-  text_freeze_backbone: true  # 冻结骨干
+  use_precomputed_text_embeddings: true  # 推荐，大幅加速训练
+  
+  # 加文本 (在线编码，较慢)
+  enabled_modalities: ['num', 'cat', 'text']
+  use_precomputed_text_embeddings: false
+  text_freeze_backbone: true
   
   # 完整模型
   enabled_modalities: ['num', 'cat', 'text', 'graph']
   fusion_use_attention: true
 ```
+
+## 预计算文本嵌入
+
+为了加速包含文本模态的训练，建议预先计算文本嵌入：
+
+```bash
+# 预计算所有数据集的文本嵌入
+python precompute_text_embeddings.py --dataset all
+
+# 或单独处理
+python precompute_text_embeddings.py --dataset twibot20
+python precompute_text_embeddings.py --dataset misbot
+```
+
+预计算后，训练时会自动使用 `text_embeddings.pt` 文件，避免重复的 Transformer 推理。
+
+**性能对比**:
+- 在线编码: ~30秒/epoch (XLM-RoBERTa 推理开销大)
+- 预计算嵌入: ~0.1秒/epoch (直接查表)
 
 ## 模态组合说明
 
@@ -158,7 +183,7 @@ model:
 |------|--------|----------|------|
 | num | NumericalEncoder | 64 | 8维数值特征 |
 | cat | CategoricalEncoder | 32 | 5维分类特征 |
-| text | TextEncoder (XLM-RoBERTa) | 256 | 用户描述+推文 |
+| text | TextEncoder (XLM-RoBERTa) 或预计算嵌入 | 256 | 用户描述+推文 |
 | graph | GraphEncoder (RGCN) | 128 | 社交网络结构，支持多关系类型 |
 
 融合后统一输出 256 维嵌入向量。
