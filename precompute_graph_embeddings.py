@@ -17,6 +17,7 @@
 import argparse
 import json
 import logging
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Optional
 
@@ -41,12 +42,16 @@ def precompute_embeddings(
     graph_output_dim: int = 128,
     graph_num_relations: int = 2,
     graph_num_layers: int = 2,
-    graph_dropout: float = 0.1,
+    graph_dropout: float = 0.0,  # 推理时不用dropout
     graph_num_bases: Optional[int] = None,
-    device: str = "cuda"
+    device: str = "cuda",
+    use_fp16: bool = True
 ) -> torch.Tensor:
     """
     预计算所有用户的图嵌入
+    
+    注意: RGCN 需要完整图结构进行消息传递，无法分 batch 处理。
+    对于大图，主要优化是使用 FP16 和确保数据在 GPU 上。
     
     Args:
         data_path: 数据集路径
@@ -62,9 +67,10 @@ def precompute_embeddings(
         graph_output_dim: 图编码器输出维度
         graph_num_relations: 关系类型数量
         graph_num_layers: RGCN层数
-        graph_dropout: Dropout比率
+        graph_dropout: Dropout比率 (推理时建议设为0)
         graph_num_bases: 基分解数量
         device: 计算设备
+        use_fp16: 是否使用半精度加速 (仅GPU)
     
     Returns:
         Tensor[num_users, graph_output_dim] 所有用户的图嵌入
@@ -76,9 +82,14 @@ def precompute_embeddings(
     if device == "cuda" and not torch.cuda.is_available():
         logger.warning("CUDA not available, using CPU")
         device = "cpu"
+        use_fp16 = False
     
     device = torch.device(device)
     logger.info(f"Using device: {device}")
+    if device.type == "cuda":
+        logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
+        logger.info(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+        logger.info(f"Using FP16: {use_fp16}")
     
     # 加载数据
     logger.info("Loading data...")
@@ -88,8 +99,9 @@ def precompute_embeddings(
     edge_type = torch.load(data_path / "edge_type.pt", weights_only=True)
     
     num_users = num_features.size(0)
-    logger.info(f"Total users: {num_users}")
-    logger.info(f"Edges: {edge_index.size(1)}")
+    num_edges = edge_index.size(1)
+    logger.info(f"Total users: {num_users:,}")
+    logger.info(f"Total edges: {num_edges:,}")
     
     # 加载预计算的文本嵌入（如果有）
     text_embeddings = None
@@ -101,6 +113,7 @@ def precompute_embeddings(
         logger.info(f"Loaded text embeddings: {text_embeddings.shape}")
     
     # 创建编码器
+    logger.info("Creating encoders...")
     from src.models.encoders.numerical import NumericalEncoder
     from src.models.encoders.categorical import CategoricalEncoder
     from src.models.encoders.graph import GraphEncoder
@@ -127,7 +140,13 @@ def precompute_embeddings(
         num_bases=graph_num_bases
     ).to(device)
     
+    # 设置为评估模式
+    num_encoder.eval()
+    cat_encoder.eval()
+    graph_encoder.eval()
+    
     # 移动数据到设备
+    logger.info("Moving data to device...")
     num_features = num_features.to(device)
     cat_features = cat_features.to(device)
     edge_index = edge_index.to(device)
@@ -135,26 +154,38 @@ def precompute_embeddings(
     if text_embeddings is not None:
         text_embeddings = text_embeddings.to(device)
     
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+        mem_allocated = torch.cuda.memory_allocated() / 1024**3
+        logger.info(f"GPU Memory allocated: {mem_allocated:.2f} GB")
+    
     # 计算图嵌入
     logger.info("Computing graph embeddings...")
     
     with torch.no_grad():
-        # 编码数值和分类特征
-        num_embed = num_encoder(num_features)
-        cat_embed = cat_encoder(cat_features)
+        # 使用混合精度
+        autocast_ctx = torch.cuda.amp.autocast() if (use_fp16 and device.type == "cuda") else nullcontext()
         
-        # 拼接作为图编码器输入
-        if text_embeddings is not None:
-            graph_input = torch.cat([num_embed, cat_embed, text_embeddings], dim=1)
-        else:
-            graph_input = torch.cat([num_embed, cat_embed], dim=1)
-        
-        logger.info(f"Graph input shape: {graph_input.shape}")
-        
-        # 图编码
-        embeddings = graph_encoder(graph_input, edge_index, edge_type)
+        with autocast_ctx:
+            # 编码数值和分类特征
+            num_embed = num_encoder(num_features)
+            cat_embed = cat_encoder(cat_features)
+            
+            # 拼接作为图编码器输入
+            if text_embeddings is not None:
+                graph_input = torch.cat([num_embed, cat_embed, text_embeddings], dim=1)
+            else:
+                graph_input = torch.cat([num_embed, cat_embed], dim=1)
+            
+            logger.info(f"Graph input shape: {graph_input.shape}")
+            
+            # 图编码 (RGCN 需要完整图，无法分batch)
+            embeddings = graph_encoder(graph_input.float(), edge_index, edge_type)
     
-    return embeddings.cpu()
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    
+    return embeddings.float().cpu()
 
 
 def main():
@@ -202,6 +233,11 @@ def main():
         help="Device to use (default: cuda)"
     )
     parser.add_argument(
+        "--no-fp16",
+        action="store_true",
+        help="Disable FP16 mixed precision (default: enabled on GPU)"
+    )
+    parser.add_argument(
         "--data-dir",
         type=str,
         default="processed_data",
@@ -244,6 +280,9 @@ def main():
             logger.info("Including text embeddings in graph input")
         
         try:
+            import time
+            start_time = time.time()
+            
             embeddings = precompute_embeddings(
                 data_path=data_path,
                 graph_input_dim=graph_input_dim,
@@ -251,8 +290,12 @@ def main():
                 graph_output_dim=args.graph_output_dim,
                 graph_num_relations=args.graph_num_relations,
                 graph_num_layers=args.graph_num_layers,
-                device=args.device
+                device=args.device,
+                use_fp16=not args.no_fp16
             )
+            
+            elapsed = time.time() - start_time
+            logger.info(f"Computation time: {elapsed:.2f}s")
             
             # 保存嵌入
             output_path = data_path / "graph_embeddings.pt"

@@ -18,6 +18,7 @@ import argparse
 import json
 import logging
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Dict, List, Optional
 from tqdm import tqdm
@@ -61,8 +62,9 @@ def precompute_embeddings(
     model_name: str = "xlm-roberta-base",
     output_dim: int = 256,
     max_length: int = 128,
-    batch_size: int = 32,
-    device: str = "cuda"
+    batch_size: int = 64,
+    device: str = "cuda",
+    use_fp16: bool = True
 ) -> torch.Tensor:
     """
     预计算所有用户的文本嵌入
@@ -72,8 +74,9 @@ def precompute_embeddings(
         model_name: 预训练模型名称
         output_dim: 输出嵌入维度
         max_length: 最大token长度
-        batch_size: 批处理大小
+        batch_size: 批处理大小 (GPU建议128-256，CPU建议32)
         device: 计算设备
+        use_fp16: 是否使用半精度加速 (仅GPU)
     
     Returns:
         Tensor[num_users, output_dim] 所有用户的文本嵌入
@@ -82,9 +85,13 @@ def precompute_embeddings(
     if device == "cuda" and not torch.cuda.is_available():
         logger.warning("CUDA not available, using CPU")
         device = "cpu"
+        use_fp16 = False
     
     device = torch.device(device)
     logger.info(f"Using device: {device}")
+    if device.type == "cuda":
+        logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
+        logger.info(f"Using FP16: {use_fp16}")
     
     # 加载用户文本
     logger.info("Loading user texts...")
@@ -115,25 +122,21 @@ def precompute_embeddings(
     
     # 准备所有文本
     all_texts = []
-    all_indices = []
     for idx in range(num_users):
         text_data = user_texts.get(idx, "")
         text = combine_text_fields(text_data)
         all_texts.append(text)
-        all_indices.append(idx)
     
     # 批量处理
     logger.info(f"Computing embeddings (batch_size={batch_size}, max_length={max_length})...")
     
     with torch.no_grad():
+        # 使用混合精度
+        autocast_ctx = torch.cuda.amp.autocast() if (use_fp16 and device.type == "cuda") else nullcontext()
+        
         for i in tqdm(range(0, num_users, batch_size), desc="Processing"):
             batch_texts = all_texts[i:i+batch_size]
-            batch_indices = all_indices[i:i+batch_size]
-            
-            # 跳过全空批次
-            non_empty = [t for t in batch_texts if t.strip()]
-            if not non_empty:
-                continue
+            batch_size_actual = len(batch_texts)
             
             # Tokenize
             encoding = tokenizer(
@@ -147,12 +150,11 @@ def precompute_embeddings(
             input_ids = encoding["input_ids"].to(device)
             attention_mask = encoding["attention_mask"].to(device)
             
-            # Forward
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-            cls_output = outputs.last_hidden_state[:, 0, :]
-            
-            # Project
-            batch_embeddings = projection(cls_output)
+            # Forward with autocast
+            with autocast_ctx:
+                outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+                cls_output = outputs.last_hidden_state[:, 0, :]
+                batch_embeddings = projection(cls_output.float())  # 确保投影层输入是float32
             
             # 将空文本的嵌入置零
             for j, text in enumerate(batch_texts):
@@ -160,7 +162,7 @@ def precompute_embeddings(
                     batch_embeddings[j] = 0
             
             # 存储
-            embeddings[batch_indices] = batch_embeddings.cpu()
+            embeddings[i:i+batch_size_actual] = batch_embeddings.cpu()
     
     return embeddings
 
@@ -195,14 +197,19 @@ def main():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=32,
-        help="Batch size for processing (default: 32)"
+        default=64,
+        help="Batch size for processing (default: 64, GPU可用128-256)"
     )
     parser.add_argument(
         "--device",
         type=str,
         default="cuda",
         help="Device to use (default: cuda)"
+    )
+    parser.add_argument(
+        "--no-fp16",
+        action="store_true",
+        help="Disable FP16 mixed precision (default: enabled on GPU)"
     )
     parser.add_argument(
         "--data-dir",
@@ -244,7 +251,8 @@ def main():
                 output_dim=args.output_dim,
                 max_length=args.max_length,
                 batch_size=args.batch_size,
-                device=args.device
+                device=args.device,
+                use_fp16=not args.no_fp16
             )
             
             # 保存嵌入
