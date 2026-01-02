@@ -180,15 +180,12 @@ class MetaTrainer:
     def _precompute_graph_embeddings(self, dataset: BotDataset) -> None:
         """预计算所有节点的图嵌入
         
-        图编码需要完整的图结构，因此在训练前预计算所有节点的图嵌入，
-        然后在 episode 中只选择相关节点的嵌入。
+        图编码器输入固定为 num + cat 特征，与文本模态独立。
+        在训练前预计算所有节点的图嵌入，然后在 episode 中只选择相关节点的嵌入。
         """
         logger.info("Precomputing graph embeddings for all nodes...")
         
-        # 获取所有节点的基础特征
-        num_users = len(dataset)
-        
-        # 构建所有节点的输入特征（num + cat + text）
+        # 构建所有节点的输入特征（num + cat）
         with torch.no_grad():
             # 数值特征
             num_features = dataset.num_features.to(self.device)
@@ -198,14 +195,12 @@ class MetaTrainer:
             cat_features = dataset.cat_features.to(self.device)
             cat_embed = self.model.encoder.categorical_encoder(cat_features) if self.model.encoder.categorical_encoder else None
             
-            # 文本特征（如果有预计算嵌入）
-            text_embed = self._precomputed_text_embeddings if self._precomputed_text_embeddings is not None else None
-            
-            # 拼接可用的嵌入作为图编码器输入
-            available_embeds = [e for e in [num_embed, cat_embed, text_embed] if e is not None]
+            # 拼接 num + cat 作为图编码器输入
+            available_embeds = [e for e in [num_embed, cat_embed] if e is not None]
             if available_embeds:
                 graph_input = torch.cat(available_embeds, dim=1)
             else:
+                num_users = len(dataset)
                 graph_input = torch.zeros(num_users, self.model.encoder.graph_encoder.input_dim, device=self.device)
             
             # 图编码

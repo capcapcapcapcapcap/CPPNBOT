@@ -180,10 +180,9 @@ python precompute_graph_embeddings.py --dataset all
 # 或单独处理
 python precompute_graph_embeddings.py --dataset twibot20
 python precompute_graph_embeddings.py --dataset misbot
-
-# 包含文本嵌入作为图输入（需要先预计算文本嵌入）
-python precompute_graph_embeddings.py --dataset all --use-text
 ```
+
+图编码器输入固定为 num + cat 特征 (96维)，与文本模态独立。各模态在融合层进行交互。
 
 预计算后，训练时会自动使用预计算的嵌入文件。
 

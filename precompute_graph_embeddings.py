@@ -36,8 +36,6 @@ def precompute_embeddings(
     cat_num_categories: list = None,
     cat_embedding_dim: int = 16,
     cat_output_dim: int = 32,
-    text_embeddings_path: Optional[Path] = None,
-    graph_input_dim: int = 96,
     graph_hidden_dim: int = 128,
     graph_output_dim: int = 128,
     graph_num_relations: int = 2,
@@ -50,8 +48,10 @@ def precompute_embeddings(
     """
     预计算所有用户的图嵌入
     
+    图编码器输入固定为 num + cat 特征 (96维)，与文本模态独立。
+    各模态在融合层进行交互，便于消融实验和独立更新。
+    
     注意: RGCN 需要完整图结构进行消息传递，无法分 batch 处理。
-    对于大图，主要优化是使用 FP16 和确保数据在 GPU 上。
     
     Args:
         data_path: 数据集路径
@@ -61,8 +61,6 @@ def precompute_embeddings(
         cat_num_categories: 分类特征类别数列表
         cat_embedding_dim: 分类嵌入维度
         cat_output_dim: 分类编码器输出维度
-        text_embeddings_path: 预计算文本嵌入路径（可选）
-        graph_input_dim: 图编码器输入维度
         graph_hidden_dim: 图编码器隐藏层维度
         graph_output_dim: 图编码器输出维度
         graph_num_relations: 关系类型数量
@@ -103,14 +101,9 @@ def precompute_embeddings(
     logger.info(f"Total users: {num_users:,}")
     logger.info(f"Total edges: {num_edges:,}")
     
-    # 加载预计算的文本嵌入（如果有）
-    text_embeddings = None
-    if text_embeddings_path and text_embeddings_path.exists():
-        text_embeddings = torch.load(text_embeddings_path, weights_only=True)
-        logger.info(f"Loaded text embeddings: {text_embeddings.shape}")
-    elif (data_path / "text_embeddings.pt").exists():
-        text_embeddings = torch.load(data_path / "text_embeddings.pt", weights_only=True)
-        logger.info(f"Loaded text embeddings: {text_embeddings.shape}")
+    # 图输入维度固定为 num + cat
+    graph_input_dim = num_output_dim + cat_output_dim
+    logger.info(f"Graph input dim: {graph_input_dim} (num={num_output_dim}, cat={cat_output_dim})")
     
     # 创建编码器
     logger.info("Creating encoders...")
@@ -151,8 +144,6 @@ def precompute_embeddings(
     cat_features = cat_features.to(device)
     edge_index = edge_index.to(device)
     edge_type = edge_type.to(device)
-    if text_embeddings is not None:
-        text_embeddings = text_embeddings.to(device)
     
     if device.type == "cuda":
         torch.cuda.synchronize()
@@ -164,18 +155,15 @@ def precompute_embeddings(
     
     with torch.no_grad():
         # 使用混合精度
-        autocast_ctx = torch.cuda.amp.autocast() if (use_fp16 and device.type == "cuda") else nullcontext()
+        autocast_ctx = torch.amp.autocast('cuda') if (use_fp16 and device.type == "cuda") else nullcontext()
         
         with autocast_ctx:
             # 编码数值和分类特征
             num_embed = num_encoder(num_features)
             cat_embed = cat_encoder(cat_features)
             
-            # 拼接作为图编码器输入
-            if text_embeddings is not None:
-                graph_input = torch.cat([num_embed, cat_embed, text_embeddings], dim=1)
-            else:
-                graph_input = torch.cat([num_embed, cat_embed], dim=1)
+            # 拼接作为图编码器输入 (固定为 num + cat)
+            graph_input = torch.cat([num_embed, cat_embed], dim=1)
             
             logger.info(f"Graph input shape: {graph_input.shape}")
             
@@ -220,11 +208,6 @@ def main():
         type=int,
         default=2,
         help="Number of RGCN layers (default: 2)"
-    )
-    parser.add_argument(
-        "--use-text",
-        action="store_true",
-        help="Include text embeddings in graph input"
     )
     parser.add_argument(
         "--device",
@@ -272,20 +255,12 @@ def main():
         logger.info(f"Processing: {dataset}")
         logger.info(f"{'='*60}")
         
-        # 计算图输入维度
-        # num(64) + cat(32) + text(256, optional)
-        graph_input_dim = 64 + 32
-        if args.use_text and (data_path / "text_embeddings.pt").exists():
-            graph_input_dim += 256
-            logger.info("Including text embeddings in graph input")
-        
         try:
             import time
             start_time = time.time()
             
             embeddings = precompute_embeddings(
                 data_path=data_path,
-                graph_input_dim=graph_input_dim,
                 graph_hidden_dim=args.graph_hidden_dim,
                 graph_output_dim=args.graph_output_dim,
                 graph_num_relations=args.graph_num_relations,
@@ -306,12 +281,11 @@ def main():
             # 保存元数据
             meta_path = data_path / "graph_embeddings_meta.json"
             meta = {
-                "graph_input_dim": graph_input_dim,
+                "graph_input_dim": 96,  # 固定: num(64) + cat(32)
                 "graph_hidden_dim": args.graph_hidden_dim,
                 "graph_output_dim": args.graph_output_dim,
                 "graph_num_relations": args.graph_num_relations,
                 "graph_num_layers": args.graph_num_layers,
-                "use_text": args.use_text,
                 "num_users": embeddings.shape[0]
             }
             with open(meta_path, 'w') as f:

@@ -132,7 +132,7 @@ def precompute_embeddings(
     
     with torch.no_grad():
         # 使用混合精度
-        autocast_ctx = torch.cuda.amp.autocast() if (use_fp16 and device.type == "cuda") else nullcontext()
+        autocast_ctx = torch.amp.autocast('cuda') if (use_fp16 and device.type == "cuda") else nullcontext()
         
         for i in tqdm(range(0, num_users, batch_size), desc="Processing"):
             batch_texts = all_texts[i:i+batch_size]
