@@ -9,6 +9,7 @@
 | default.yaml | num + cat | 默认配置，基线模型 |
 | ablation_num_cat.yaml | num + cat | 消融实验：基线 |
 | ablation_num_cat_text.yaml | num + cat + text | 消融实验：+文本 |
+| ablation_num_cat_graph.yaml | num + cat + graph | 消融实验：+图 (RGCN) |
 | ablation_all.yaml | num + cat + text + graph | 消融实验：完整模型 |
 
 ## 配置结构
@@ -32,12 +33,12 @@ model:
   text_max_length: 512
   text_freeze_backbone: true
   
-  # 图编码器 (可选)
+  # 图编码器 (RGCN，可选)
   graph_input_dim: 256
   graph_hidden_dim: 128
   graph_output_dim: 128
-  graph_num_heads: 4
-  graph_num_layers: 2
+  graph_num_relations: 2    # 边类型数量 (follow, friend)
+  graph_num_layers: 2       # RGCN层数
   graph_dropout: 0.1
   
   # 融合模块
@@ -158,6 +159,6 @@ model:
 | num | NumericalEncoder | 64 | 8维数值特征 |
 | cat | CategoricalEncoder | 32 | 5维分类特征 |
 | text | TextEncoder (XLM-RoBERTa) | 256 | 用户描述+推文 |
-| graph | GraphEncoder (GAT) | 128 | 社交网络结构 |
+| graph | GraphEncoder (RGCN) | 128 | 社交网络结构，支持多关系类型 |
 
 融合后统一输出 256 维嵌入向量。

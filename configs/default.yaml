@@ -22,13 +22,15 @@ model:
   text_max_length: 512
   text_freeze_backbone: true  # Freeze backbone during training
   
-  # Graph encoder (GAT): node features + edges → 128-dim output
+  # Graph encoder (RGCN): node features + edges → 128-dim output
+  # RGCN原生支持多关系类型，比GAT更适合异构社交网络
   graph_input_dim: 256  # Input from other encoders
   graph_hidden_dim: 128
   graph_output_dim: 128
-  graph_num_heads: 4
-  graph_num_layers: 2
+  graph_num_relations: 2  # Number of relation types (follow, friend)
+  graph_num_layers: 2     # 2-hop neighbor aggregation
   graph_dropout: 0.1
+  # graph_num_bases: null  # Basis decomposition (null = disabled)
   
   # Fusion module: multi-modal → 256-dim output
   fusion_output_dim: 256

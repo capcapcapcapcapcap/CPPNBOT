@@ -91,9 +91,9 @@
 │       │                                                         │
 │       ▼                                                         │
 │  ┌─────────────────────────────────┐                           │
-│  │     GraphEncoder (GAT)          │                           │
-│  │  GATConv × 2 layers             │                           │
-│  │  Multi-head attention           │                           │
+│  │     GraphEncoder (RGCN)         │                           │
+│  │  RGCNConv × 2 layers            │                           │
+│  │  多关系类型支持                  │                           │
 │  └─────────────────┬───────────────┘                           │
 │                    │ [batch, 128]                               │
 │                    │                                            │
@@ -375,8 +375,8 @@ model:
   graph_input_dim: 256
   graph_hidden_dim: 128
   graph_output_dim: 128
-  graph_num_heads: 4
-  graph_num_layers: 2
+  graph_num_relations: 2  # 边类型数量 (follow, friend)
+  graph_num_layers: 2     # RGCN层数
   
   # 融合模块
   fusion_output_dim: 256  # 最终嵌入维度

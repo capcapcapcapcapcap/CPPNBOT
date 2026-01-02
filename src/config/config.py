@@ -44,13 +44,14 @@ class ModelConfig:
     text_max_length: int = 512
     text_freeze_backbone: bool = True
     
-    # Graph encoder (GAT)
+    # Graph encoder (RGCN): 原生支持多关系类型的图卷积
     graph_input_dim: int = 256
     graph_hidden_dim: int = 128
     graph_output_dim: int = 128
-    graph_num_heads: int = 4
+    graph_num_relations: int = 2  # 边类型数量 (follow, friend)
     graph_num_layers: int = 2
     graph_dropout: float = 0.1
+    graph_num_bases: Optional[int] = None  # 基分解数量，None表示不使用
     
     # Fusion module
     fusion_output_dim: int = 256
@@ -85,8 +86,8 @@ class ModelConfig:
             raise ValueError(f"graph_hidden_dim must be positive, got {self.graph_hidden_dim}")
         if self.graph_output_dim <= 0:
             raise ValueError(f"graph_output_dim must be positive, got {self.graph_output_dim}")
-        if self.graph_num_heads <= 0:
-            raise ValueError(f"graph_num_heads must be positive, got {self.graph_num_heads}")
+        if self.graph_num_relations <= 0:
+            raise ValueError(f"graph_num_relations must be positive, got {self.graph_num_relations}")
         if self.graph_num_layers <= 0:
             raise ValueError(f"graph_num_layers must be positive, got {self.graph_num_layers}")
         if not 0.0 <= self.graph_dropout < 1.0:
@@ -194,9 +195,10 @@ def _dict_to_model_config(d: dict) -> ModelConfig:
         graph_input_dim=d.get('graph_input_dim', 256),
         graph_hidden_dim=d.get('graph_hidden_dim', 128),
         graph_output_dim=d.get('graph_output_dim', 128),
-        graph_num_heads=d.get('graph_num_heads', 4),
+        graph_num_relations=d.get('graph_num_relations', 2),
         graph_num_layers=d.get('graph_num_layers', 2),
         graph_dropout=d.get('graph_dropout', 0.1),
+        graph_num_bases=d.get('graph_num_bases', None),
         fusion_output_dim=d.get('fusion_output_dim', 256),
         fusion_dropout=d.get('fusion_dropout', 0.1),
         fusion_use_attention=d.get('fusion_use_attention', True),

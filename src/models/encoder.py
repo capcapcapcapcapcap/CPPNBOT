@@ -48,9 +48,10 @@ class MultiModalEncoder(nn.Module):
                 - graph_input_dim: Graph input dimension (default: 256)
                 - graph_hidden_dim: Graph hidden dimension (default: 128)
                 - graph_output_dim: Graph output dimension (default: 128)
-                - graph_num_heads: Number of attention heads (default: 4)
-                - graph_num_layers: Number of GAT layers (default: 2)
+                - graph_num_relations: Number of relation types (default: 2)
+                - graph_num_layers: Number of RGCN layers (default: 2)
                 - graph_dropout: Graph dropout rate (default: 0.1)
+                - graph_num_bases: Number of bases for RGCN decomposition (default: None)
                 - fusion_output_dim: Fusion output dimension (default: 256)
                 - fusion_dropout: Fusion dropout rate (default: 0.1)
                 - fusion_use_attention: Whether to use attention fusion (default: True)
@@ -122,17 +123,19 @@ class MultiModalEncoder(nn.Module):
                 graph_input_dim = config.get('graph_input_dim', 256)
                 graph_hidden_dim = config.get('graph_hidden_dim', 128)
                 graph_output_dim = config.get('graph_output_dim', 128)
-                graph_num_heads = config.get('graph_num_heads', 4)
+                graph_num_relations = config.get('graph_num_relations', 2)
                 graph_num_layers = config.get('graph_num_layers', 2)
                 graph_dropout = config.get('graph_dropout', 0.1)
+                graph_num_bases = config.get('graph_num_bases', None)
                 
                 self.graph_encoder = GraphEncoder(
                     input_dim=graph_input_dim,
                     hidden_dim=graph_hidden_dim,
                     output_dim=graph_output_dim,
-                    num_heads=graph_num_heads,
+                    num_relations=graph_num_relations,
                     num_layers=graph_num_layers,
-                    dropout=graph_dropout
+                    dropout=graph_dropout,
+                    num_bases=graph_num_bases
                 )
             else:
                 import warnings

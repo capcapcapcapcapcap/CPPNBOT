@@ -99,8 +99,8 @@ python experiments/evaluate_target.py --model-path results/{timestamp}/best_mode
     ├── 文本特征 [可选] ──→ TextEncoder (XLM-RoBERTa) ──→ [256维]
     │   (description + tweets)
     │
-    └── 图特征 [可选] ──→ GraphEncoder (GAT) ──→ [128维]
-        (社交网络结构)
+    └── 图特征 [可选] ──→ GraphEncoder (RGCN) ──→ [128维]
+        (社交网络结构，支持多关系类型)
                                                    │
                                                    ▼
                                         AttentionFusion / FusionModule
@@ -121,7 +121,7 @@ python experiments/evaluate_target.py --model-path results/{timestamp}/best_mode
 - **元学习训练**: 采用 Episode 训练方式 (N-way K-shot)，学习从少量样本泛化的能力
 - **多模态融合**: 支持数值、分类、文本、图四种模态的灵活组合
 - **注意力融合**: 使用注意力机制自动学习各模态的重要性权重
-- **跨语言支持**: 使用 XLM-RoBERTa 支持中英文文本编码
+- **图特征编码**: 使用 RGCN (Relational GCN) 原生支持多关系类型
 - **跨域迁移**: 在源域训练，目标域仅需少量样本即可适应
 - **消融实验**: 预配置多种模态组合，便于分析各组件贡献
 
@@ -149,6 +149,7 @@ python experiments/evaluate_target.py --model-path results/{timestamp}/best_mode
 |----------|----------|------|
 | ablation_num_cat.yaml | num, cat | 基线模型 |
 | ablation_num_cat_text.yaml | num, cat, text | +文本编码 |
+| ablation_num_cat_graph.yaml | num, cat, graph | +图编码 (RGCN) |
 | ablation_all.yaml | num, cat, text, graph | 完整模型 |
 
 ## 实验结果

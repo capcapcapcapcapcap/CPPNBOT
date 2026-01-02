@@ -66,9 +66,9 @@ src/
   - 支持跨语言文本编码
   - 可选冻结骨干网络
 
-- `GraphEncoder`: 图编码器 (GAT→128)
-  - 多层 GAT 卷积
-  - 多头注意力机制
+- `GraphEncoder`: 图编码器 (RGCN→128)
+  - 多层 RGCN 卷积
+  - 原生支持多关系类型
 
 - `MultiModalEncoder`: 多模态编码器
   - 组合各类编码器

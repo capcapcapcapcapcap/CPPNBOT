@@ -71,7 +71,7 @@
 | 数值特征 | 8维 → 64维 | NumericalEncoder (MLP) | followers, following, tweets, listed, age, ratio, username_len, desc_len |
 | 分类特征 | 5维 → 32维 | CategoricalEncoder (Embedding) | verified, protected, default_avatar, has_url, has_location |
 | 文本特征 | 文本 → 256维 | TextEncoder (XLM-RoBERTa) | description + tweets，支持跨语言 |
-| 图特征 | 节点 → 128维 | GraphEncoder (GAT) | 社交网络结构信息 |
+| 图特征 | 节点 → 128维 | GraphEncoder (RGCN) | 社交网络结构，原生支持多关系类型 |
 
 **特征融合**：
 - 基础模式：简单拼接 + 投影 (96维 → 256维)
@@ -165,7 +165,7 @@ src/
 │   │   ├── numerical.py  # NumericalEncoder (8→64)
 │   │   ├── categorical.py # CategoricalEncoder (5→32)
 │   │   ├── text.py       # TextEncoder (XLM-RoBERTa→256)
-│   │   └── graph.py      # GraphEncoder (GAT→128)
+│   │   └── graph.py      # GraphEncoder (RGCN→128)
 │   │
 │   ├── encoder.py        # MultiModalEncoder 多模态编码器
 │   ├── fusion.py         # FusionModule, AttentionFusion 融合模块
@@ -344,6 +344,7 @@ Loss = NLLLoss(log_probs, true_labels)
 |------|------|----------|
 | ablation_num_cat | num + cat | 基线效果 |
 | ablation_num_cat_text | num + cat + text | 文本的贡献 |
+| ablation_num_cat_graph | num + cat + graph | 图结构的贡献 |
 | ablation_all | num + cat + text + graph | 完整模型效果 |
 
 ---

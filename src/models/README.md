@@ -14,7 +14,7 @@
 - `num`: 数值特征 (8维 → 64维)
 - `cat`: 分类特征 (5维 → 32维)
 - `text`: 文本特征 (XLM-RoBERTa → 256维)
-- `graph`: 图特征 (GAT → 128维)
+- `graph`: 图特征 (RGCN → 128维)
 
 **输入:** `{'num_features': [batch, 8], 'cat_features': [batch, 5]}`
 **输出:** `Tensor[batch, 256]`
@@ -89,9 +89,14 @@
 `GraphEncoder` 类 - 图编码器。
 
 **架构:**
-- 多层 GAT 卷积
-- 多头注意力机制
+- 多层 RGCN (Relational GCN) 卷积
+- 原生支持多关系类型 (follow, friend, mention)
 - 输出 128 维
+
+**为什么选择 RGCN 而非 GAT:**
+- RGCN 为每种关系类型学习独立的变换矩阵
+- 更适合异构社交网络的多关系建模
+- 参考 BotRGCN 论文在 Twibot-20 上的验证
 
 ## 模型架构图
 
@@ -125,7 +130,7 @@
     └── graph (可选)
             │
             ▼
-        GraphEncoder (GAT→128)
+        GraphEncoder (RGCN→128)
             │
             ▼
         [batch, 128]

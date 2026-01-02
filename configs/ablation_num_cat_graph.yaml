@@ -1,5 +1,5 @@
-# Ablation Configuration: All Modalities (Full Model)
-# Uses all available modalities: numerical, categorical, text, and graph
+# Ablation Configuration: Numerical + Categorical + Graph
+# Adds RGCN graph encoding to the baseline
 
 # Model architecture configuration
 model:
@@ -16,28 +16,22 @@ model:
   cat_embedding_dim: 16
   cat_output_dim: 32
   
-  # Text encoder (XLM-RoBERTa): text → 256-dim output
-  text_model_name: xlm-roberta-base
-  text_output_dim: 256
-  text_max_length: 512
-  text_freeze_backbone: true  # Freeze backbone during training
-  
   # Graph encoder (RGCN): node features + edges → 128-dim output
   # RGCN原生支持多关系类型，比GAT更适合异构社交网络
-  graph_input_dim: 256  # Input from other encoders
+  graph_input_dim: 96   # Input from num(64) + cat(32) encoders
   graph_hidden_dim: 128
   graph_output_dim: 128
   graph_num_relations: 2  # Number of relation types (follow, friend)
   graph_num_layers: 2     # 2-hop neighbor aggregation
   graph_dropout: 0.1
   
-  # Fusion module: (64 + 32 + 256 + 128) → 256-dim output
+  # Fusion module: (64 + 32 + 128) → 256-dim output
   fusion_output_dim: 256
   fusion_dropout: 0.1
   fusion_use_attention: true
   
-  # FULL MODEL: All modalities enabled
-  enabled_modalities: ['num', 'cat', 'text', 'graph']
+  # ABLATION: Numerical + Categorical + Graph
+  enabled_modalities: ['num', 'cat', 'graph']
   
   # Distance metric for prototype comparison
   distance_metric: euclidean
@@ -58,15 +52,12 @@ training:
   learning_rate: 0.001
   weight_decay: 0.0001
   
-  # Text encoder learning rate (smaller than main learning rate)
-  text_learning_rate: 0.00001
-  
   # Early stopping
   patience: 10
 
 # Data paths
 data_dir: processed_data
-output_dir: results/ablation_all
+output_dir: results/ablation_num_cat_graph
 
 # Reproducibility
 seed: 42

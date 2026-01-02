@@ -1,8 +1,14 @@
-"""Graph encoder using Graph Attention Networks (GAT) for bot detection model.
+"""Graph encoder using Relational Graph Convolutional Networks (RGCN) for bot detection.
 
 This module implements a graph encoder that leverages social network structure
-to learn user representations through multi-layer GAT with support for multiple
-edge types (follow, friend, mention).
+to learn user representations through multi-layer RGCN with native support for
+multiple edge types (follow, friend, mention).
+
+RGCN is more suitable than GAT for heterogeneous social networks because:
+1. Native support for multiple relation types through separate weight matrices
+2. Better modeling of different semantic relationships (follow vs friend vs mention)
+3. More parameter-efficient with basis decomposition
+4. Proven effectiveness on Twibot-20 dataset (BotRGCN paper)
 """
 
 import torch
@@ -12,24 +18,27 @@ from typing import Optional
 
 # Try to import PyTorch Geometric components
 try:
-    from torch_geometric.nn import GATConv
+    from torch_geometric.nn import RGCNConv
     HAS_TORCH_GEOMETRIC = True
 except ImportError:
     HAS_TORCH_GEOMETRIC = False
-    GATConv = None
+    RGCNConv = None
 
 
 class GraphEncoder(nn.Module):
-    """图编码器: 节点特征 + 边 → 128维 (使用 GAT)
+    """图编码器: 节点特征 + 边 → 128维 (使用 RGCN)
     
-    Uses Graph Attention Network (GAT) layers for message passing with support
-    for multiple edge types. Implements k-hop neighbor aggregation through
-    stacked GAT layers.
+    Uses Relational Graph Convolutional Network (RGCN) layers for message passing
+    with native support for multiple edge types. Implements k-hop neighbor 
+    aggregation through stacked RGCN layers.
+    
+    RGCN learns separate transformation matrices for each relation type,
+    enabling better modeling of heterogeneous social network relationships.
     
     Requirements:
         - 7.1: Output 128-dimensional embedding per node
-        - 7.2: Use GAT layers for message passing
-        - 7.3: Support multiple edge types (follow, friend, mention)
+        - 7.2: Use RGCN layers for message passing (changed from GAT)
+        - 7.3: Native support for multiple edge types (follow, friend, mention)
         - 7.4: Aggregate information from k-hop neighbors
         - 7.5: Apply dropout for regularization
     """
@@ -39,20 +48,23 @@ class GraphEncoder(nn.Module):
         input_dim: int = 256,
         hidden_dim: int = 128,
         output_dim: int = 128,
-        num_heads: int = 4,
+        num_relations: int = 2,
         num_layers: int = 2,
         dropout: float = 0.1,
-        num_edge_types: int = 3
+        num_bases: Optional[int] = None,
+        aggr: str = 'mean'
     ):
         """
         Args:
             input_dim: Input node feature dimension (default: 256, from other encoders)
             hidden_dim: Hidden layer dimension (default: 128)
             output_dim: Output embedding dimension (default: 128)
-            num_heads: Number of attention heads (default: 4)
-            num_layers: Number of GAT layers for k-hop aggregation (default: 2)
+            num_relations: Number of relation/edge types (default: 2 for follow, friend)
+            num_layers: Number of RGCN layers for k-hop aggregation (default: 2)
             dropout: Dropout probability for regularization (default: 0.1)
-            num_edge_types: Number of edge types (default: 3 for follow, friend, mention)
+            num_bases: Number of bases for basis decomposition (default: None = no decomposition)
+                       Using basis decomposition reduces parameters when num_relations is large
+            aggr: Aggregation scheme ('mean', 'sum', 'max') (default: 'mean')
         """
         super().__init__()
         
@@ -65,49 +77,36 @@ class GraphEncoder(nn.Module):
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
-        self.num_heads = num_heads
+        self.num_relations = num_relations
         self.num_layers = num_layers
         self.dropout = dropout
-        self.num_edge_types = num_edge_types
         
-        # Edge type embeddings for heterogeneous edges
-        self.edge_type_embedding = nn.Embedding(num_edge_types, hidden_dim)
-        
-        # Build GAT layers
-        self.gat_layers = nn.ModuleList()
+        # Build RGCN layers
+        self.rgcn_layers = nn.ModuleList()
         self.layer_norms = nn.ModuleList()
         
         for i in range(num_layers):
             # First layer: input_dim -> hidden_dim
-            # Subsequent layers: hidden_dim * num_heads -> hidden_dim
-            if i == 0:
-                in_channels = input_dim
-            else:
-                in_channels = hidden_dim * num_heads
-            
-            # Last layer: concat=False to get hidden_dim output
-            # Other layers: concat=True to get hidden_dim * num_heads output
-            concat = (i < num_layers - 1)
+            # Subsequent layers: hidden_dim -> hidden_dim
+            in_channels = input_dim if i == 0 else hidden_dim
             out_channels = hidden_dim
             
-            gat_layer = GATConv(
+            rgcn_layer = RGCNConv(
                 in_channels=in_channels,
                 out_channels=out_channels,
-                heads=num_heads,
-                concat=concat,
-                dropout=dropout,
-                add_self_loops=True
+                num_relations=num_relations,
+                num_bases=num_bases,
+                aggr=aggr
             )
-            self.gat_layers.append(gat_layer)
-            
-            # Layer norm after each GAT layer
-            if concat:
-                self.layer_norms.append(nn.LayerNorm(hidden_dim * num_heads))
-            else:
-                self.layer_norms.append(nn.LayerNorm(hidden_dim))
+            self.rgcn_layers.append(rgcn_layer)
+            self.layer_norms.append(nn.LayerNorm(out_channels))
         
-        # Final projection to output_dim
-        self.output_projection = nn.Linear(hidden_dim, output_dim)
+        # Final projection to output_dim (if different from hidden_dim)
+        if hidden_dim != output_dim:
+            self.output_projection = nn.Linear(hidden_dim, output_dim)
+        else:
+            self.output_projection = nn.Identity()
+        
         self.output_norm = nn.LayerNorm(output_dim)
         
         # Dropout layer
@@ -120,36 +119,33 @@ class GraphEncoder(nn.Module):
         edge_type: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
-        Encode graph nodes using GAT layers.
+        Encode graph nodes using RGCN layers.
         
         Args:
             x: Tensor[n_nodes, input_dim] node features
             edge_index: Tensor[2, n_edges] edge indices (source, target)
-            edge_type: Tensor[n_edges] edge types (optional, 0=follow, 1=friend, 2=mention)
+            edge_type: Tensor[n_edges] edge types (0=follow, 1=friend, etc.)
+                       If None, all edges are treated as type 0
             
         Returns:
             Tensor[n_nodes, output_dim] graph-encoded node embeddings
         """
-        # Handle edge type information
-        edge_attr = None
-        if edge_type is not None and edge_index.size(1) > 0:
-            # Get edge type embeddings
-            edge_attr = self.edge_type_embedding(edge_type)
+        # Handle missing edge_type - default to all zeros (single relation type)
+        if edge_type is None:
+            edge_type = torch.zeros(edge_index.size(1), dtype=torch.long, device=edge_index.device)
         
-        # Apply GAT layers for k-hop aggregation
+        # Apply RGCN layers for k-hop aggregation
         h = x
-        for i, (gat_layer, layer_norm) in enumerate(zip(self.gat_layers, self.layer_norms)):
-            # GAT convolution
-            # Note: GATConv doesn't directly use edge_attr, but we can incorporate
-            # edge type information through edge attention or separate processing
-            h = gat_layer(h, edge_index)
+        for i, (rgcn_layer, layer_norm) in enumerate(zip(self.rgcn_layers, self.layer_norms)):
+            # RGCN convolution with relation-specific transformations
+            h = rgcn_layer(h, edge_index, edge_type)
             
             # Layer normalization
             h = layer_norm(h)
             
             # Apply activation and dropout (except for last layer before projection)
             if i < self.num_layers - 1:
-                h = F.elu(h)
+                h = F.leaky_relu(h, negative_slope=0.2)
                 h = self.dropout_layer(h)
         
         # Final projection
@@ -162,12 +158,11 @@ class GraphEncoder(nn.Module):
         """Return the number of hops (layers) for neighbor aggregation.
         
         Returns:
-            Number of GAT layers, which equals k-hop aggregation depth
+            Number of RGCN layers, which equals k-hop aggregation depth
         """
         return self.num_layers
 
 
-# Provide a fallback class when torch-geometric is not installed
 class GraphEncoderFallback(nn.Module):
     """Fallback GraphEncoder when torch-geometric is not available.
     
@@ -180,10 +175,11 @@ class GraphEncoderFallback(nn.Module):
         input_dim: int = 256,
         hidden_dim: int = 128,
         output_dim: int = 128,
-        num_heads: int = 4,
+        num_relations: int = 2,
         num_layers: int = 2,
         dropout: float = 0.1,
-        num_edge_types: int = 3
+        num_bases: Optional[int] = None,
+        aggr: str = 'mean'
     ):
         super().__init__()
         
@@ -192,11 +188,11 @@ class GraphEncoderFallback(nn.Module):
         self.output_dim = output_dim
         self.num_layers = num_layers
         
-        # Simple MLP fallback
+        # Simple MLP fallback (ignores graph structure)
         self.mlp = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
-            nn.ELU(),
+            nn.LeakyReLU(negative_slope=0.2),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, output_dim),
             nn.LayerNorm(output_dim)
