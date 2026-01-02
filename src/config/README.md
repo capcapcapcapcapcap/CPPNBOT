@@ -9,27 +9,22 @@
 定义配置数据类和配置加载函数。
 
 **数据类:**
+
 - `ModelConfig`: 模型架构参数
-  - `num_input_dim`: 数值特征输入维度 (默认: 5)
-  - `num_hidden_dim`: 数值编码器隐藏层维度 (默认: 32)
-  - `num_output_dim`: 数值编码器输出维度 (默认: 64)
-  - `cat_num_categories`: 各分类特征的类别数
-  - `cat_embedding_dim`: 分类嵌入维度 (默认: 16)
-  - `cat_output_dim`: 分类编码器输出维度 (默认: 32)
-  - `fusion_output_dim`: 融合后输出维度 (默认: 256)
-  - `fusion_dropout`: Dropout 比率 (默认: 0.1)
-  - `distance_metric`: 距离度量 ('euclidean' 或 'cosine')
+  - 数值编码器: `num_input_dim` (8), `num_hidden_dim` (32), `num_output_dim` (64)
+  - 分类编码器: `cat_num_categories` ([2,2,2,2,2]), `cat_embedding_dim` (16), `cat_output_dim` (32)
+  - 文本编码器: `text_model_name`, `text_output_dim` (256), `text_max_length` (512), `text_freeze_backbone`
+  - 图编码器: `graph_input_dim`, `graph_hidden_dim`, `graph_output_dim`, `graph_num_heads`, `graph_num_layers`
+  - 融合模块: `fusion_output_dim` (256), `fusion_dropout` (0.1), `fusion_use_attention`
+  - 模态配置: `enabled_modalities` (['num', 'cat'])
+  - 距离度量: `distance_metric` ('euclidean' 或 'cosine')
 
 - `TrainingConfig`: 训练参数
-  - `n_way`: Episode 类别数 (默认: 2)
-  - `k_shot`: 每类 support 样本数 (默认: 5)
-  - `n_query`: 每类 query 样本数 (默认: 15)
-  - `n_episodes_train`: 每 epoch 训练 episode 数 (默认: 100)
-  - `n_episodes_val`: 验证 episode 数 (默认: 50)
-  - `n_epochs`: 最大训练轮数 (默认: 100)
-  - `learning_rate`: 学习率 (默认: 1e-3)
-  - `weight_decay`: 权重衰减 (默认: 1e-4)
-  - `patience`: 早停耐心值 (默认: 10)
+  - Episode 配置: `n_way` (2), `k_shot` (10), `n_query` (15)
+  - Episode 数量: `n_episodes_train` (100), `n_episodes_val` (50)
+  - 训练参数: `n_epochs` (200), `learning_rate` (0.001), `weight_decay` (0.0001)
+  - 文本学习率: `text_learning_rate` (0.00001)
+  - 早停: `patience` (10)
 
 - `Config`: 完整配置
   - `model`: ModelConfig 实例
@@ -51,8 +46,17 @@ config = load_config("configs/default.yaml")
 
 # 访问参数
 print(config.model.fusion_output_dim)  # 256
-print(config.training.k_shot)          # 5
+print(config.model.enabled_modalities)  # ['num', 'cat']
+print(config.training.k_shot)          # 10
 
 # 命令行覆盖
 config.training.n_epochs = 50
 ```
+
+## 配置验证
+
+`ModelConfig` 和 `TrainingConfig` 在 `__post_init__` 中进行参数验证:
+- 维度参数必须为正整数
+- Dropout 必须在 [0, 1) 范围内
+- 距离度量必须是 'euclidean' 或 'cosine'
+- 模态列表不能为空

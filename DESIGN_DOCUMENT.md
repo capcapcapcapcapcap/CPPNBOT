@@ -38,8 +38,8 @@
 │                      元训练阶段 (Twibot-20)                  │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│   Episode采样 → 特征编码器 → 原型计算 → 距离分类      │
-│   (N-way K-shot)   (多模态)      (类中心)    (查询集)       │
+│   Episode采样 → 多模态编码器 → 原型计算 → 距离分类           │
+│   (2-way 10-shot)  (可配置模态)   (类中心)    (查询集)       │
 │                                                             │
 │   重复数千个episode，学习：                                  │
 │   1. 如何从少量样本提取有效特征                              │
@@ -53,9 +53,9 @@
 │                      少样本适应阶段 (Misbot)                 │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│   Support Set → 预训练编码器 → 计算新原型 → 分类      │
-│   (5个human,       (冻结)         (目标域)      (测试集)    │
-│    5个bot)                                                  │
+│   Support Set → 预训练编码器 → 计算新原型 → 分类测试集       │
+│   (K个human,       (冻结)         (目标域)                  │
+│    K个bot)                                                  │
 │                                                             │
 │   无需训练，直接用support set构建原型进行预测                │
 │                                                             │
@@ -64,27 +64,29 @@
 
 ### 2.3 特征设计
 
-**关键决策**：使用什么特征？
+**多模态特征体系**：
 
-经过分析两个数据集的共有信息：
+| 特征类型 | 维度 | 编码器 | 说明 |
+|----------|------|--------|------|
+| 数值特征 | 8维 → 64维 | NumericalEncoder (MLP) | followers, following, tweets, listed, age, ratio, username_len, desc_len |
+| 分类特征 | 5维 → 32维 | CategoricalEncoder (Embedding) | verified, protected, default_avatar, has_url, has_location |
+| 文本特征 | 文本 → 256维 | TextEncoder (XLM-RoBERTa) | description + tweets，支持跨语言 |
+| 图特征 | 节点 → 128维 | GraphEncoder (GAT) | 社交网络结构信息 |
 
-| 特征类型 | Twibot-20 | Misbot | 统一方案 |
-|----------|-----------|--------|----------|
-| 数值特征 | followers, following, tweets, listed, age | followers, following, tweets | **5维统一**（缺失填0） |
-| 分类特征 | verified, protected, default_avatar | 20维categorical | **3维统一**（取前3维） |
-| 文本特征 | description + tweets (英文) | description + tweets (中文) | **跨语言编码器** |
-| 图结构 | follow, friend关系 | follow, mention关系 | **统一边类型** |
+**特征融合**：
+- 基础模式：简单拼接 + 投影 (96维 → 256维)
+- 注意力模式：学习各模态权重，加权融合 (480维 → 256维)
 
-**特征编码器设计**：
+**模态组合配置**：
+```yaml
+# 基线 (默认)
+enabled_modalities: ['num', 'cat']
 
-```python
-用户表示 = Fusion(
-    数值编码(5维 → 64维),      # MLP
-    分类编码(3维 → 32维),      # Embedding
-    文本编码(描述+推文 → 256维), # XLM-RoBERTa (跨语言)
-    图编码(邻居聚合 → 128维)    # GAT (可选)
-)
-# 最终: 480维 → 256维 (投影层)
+# 加文本
+enabled_modalities: ['num', 'cat', 'text']
+
+# 完整模型
+enabled_modalities: ['num', 'cat', 'text', 'graph']
 ```
 
 ---
@@ -98,35 +100,50 @@
 ```
 processed_data/
 ├── twibot20/
-│   ├── users.pt          # 用户基础信息 (id, 原始特征)
-│   ├── num_features.pt   # 数值特征 [N, 5] (已标准化)
-│   ├── cat_features.pt   # 分类特征 [N, 3]
+│   ├── num_features.pt   # 数值特征 [N, 8] (已标准化)
+│   ├── cat_features.pt   # 分类特征 [N, 5]
 │   ├── labels.pt         # 标签 [N] (0=human, 1=bot, -1=未标注)
-│   ├── splits.pt         # 划分索引 {train, val, test}
+│   ├── train_idx.pt      # 训练集索引
+│   ├── val_idx.pt        # 验证集索引
+│   ├── test_idx.pt       # 测试集索引
 │   ├── edge_index.pt     # 图边 [2, E]
 │   ├── edge_type.pt      # 边类型 [E]
-│   └── user_tweets.npy   # 用户-推文映射 {user_idx: [tweet_ids]}
+│   ├── user_texts.json   # 用户文本 {idx: {description, tweets}}
+│   └── metadata.json     # 元数据
 │
 └── misbot/
     └── (同上结构)
 ```
 
-### 3.2 预处理流程
+### 3.2 数值特征 (8维)
+
+| 索引 | 特征名 | 说明 |
+|------|--------|------|
+| 0 | followers_count | 粉丝数 |
+| 1 | following_count | 关注数 |
+| 2 | tweet_count | 推文数 |
+| 3 | listed_count | 被列表收录次数 |
+| 4 | account_age_days | 账户年龄天数 |
+| 5 | followers_following_ratio | 粉丝/关注比 |
+| 6 | username_length | 用户名长度 |
+| 7 | description_length | 简介长度 |
+
+### 3.3 分类特征 (5维)
+
+| 索引 | 特征名 | 类别 |
+|------|--------|------|
+| 0 | verified | 0=未验证, 1=已验证 |
+| 1 | protected | 0=公开, 1=受保护 |
+| 2 | default_avatar | 0=自定义头像, 1=默认头像 |
+| 3 | has_url | 0=无URL, 1=有URL |
+| 4 | has_location | 0=无位置, 1=有位置 |
+
+### 3.4 预处理流程
 
 ```
 原始数据 → 流式加载 → 特征提取 → 标准化 → 保存
            (解决内存)    (统一格式)   (Z-score)
 ```
-
-### 3.3 文本处理策略
-
-**预处理阶段**：只保存原始文本，不做编码
-**模型阶段**：在线编码，支持端到端训练
-
-原因：
-1. 文本编码器是模型的一部分，应该可以微调
-2. 避免预处理和模型的耦合
-3. 不同实验可能用不同的文本模型
 
 ---
 
@@ -136,23 +153,27 @@ processed_data/
 
 ```
 src/
+├── config/
+│   └── config.py         # ModelConfig, TrainingConfig, Config 数据类
+│
 ├── data/
-│   ├── dataset.py        # 数据集类
-│   └── episode_sampler.py # Episode采样器
+│   ├── dataset.py        # BotDataset 数据集类
+│   └── episode_sampler.py # EpisodeSampler N-way K-shot 采样器
 │
 ├── models/
 │   ├── encoders/
-│   │   ├── numerical.py  # 数值编码器
-│   │   ├── categorical.py # 分类编码器
-│   │   ├── text.py       # 文本编码器 (XLM-RoBERTa)
-│   │   └── graph.py      # 图编码器 (GAT)
+│   │   ├── numerical.py  # NumericalEncoder (8→64)
+│   │   ├── categorical.py # CategoricalEncoder (5→32)
+│   │   ├── text.py       # TextEncoder (XLM-RoBERTa→256)
+│   │   └── graph.py      # GraphEncoder (GAT→128)
 │   │
-│   ├── fusion.py         # 多模态融合
-│   └── prototypical.py   # 原型网络
+│   ├── encoder.py        # MultiModalEncoder 多模态编码器
+│   ├── fusion.py         # FusionModule, AttentionFusion 融合模块
+│   └── prototypical.py   # PrototypicalNetwork 原型网络
 │
 └── training/
-    ├── meta_trainer.py   # 元训练循环
-    └── evaluator.py      # 评估器
+    ├── meta_trainer.py   # MetaTrainer 元训练器
+    └── evaluator.py      # Evaluator 评估器
 ```
 
 ### 4.2 原型网络核心逻辑
@@ -163,33 +184,30 @@ class PrototypicalNetwork(nn.Module):
         self.encoder = encoder  # 多模态编码器
         self.distance = distance
     
-    def forward(self, support_x, support_y, query_x):
+    def forward(self, support_set, query_set, **kwargs):
         # 1. 编码所有样本
-        support_features = self.encoder(support_x)  # [N_support, D]
-        query_features = self.encoder(query_x)      # [N_query, D]
+        support_features = self.encoder(support_set, **kwargs)  # [N_support, D]
+        query_features = self.encoder(query_set, **kwargs)      # [N_query, D]
         
         # 2. 计算类原型 (每个类的特征均值)
-        prototypes = {}
-        for label in [0, 1]:  # human, bot
-            mask = (support_y == label)
-            prototypes[label] = support_features[mask].mean(dim=0)
+        prototypes = self.compute_prototypes(support_features, support_labels)
         
         # 3. 计算查询样本到各原型的距离
-        proto_stack = torch.stack([prototypes[0], prototypes[1]])  # [2, D]
-        distances = torch.cdist(query_features, proto_stack)       # [N_query, 2]
+        distances = self._compute_distances(query_features, prototypes)
         
         # 4. 距离转概率 (距离越小，概率越大)
-        logits = -distances
-        return F.log_softmax(logits, dim=-1)
+        log_probs = F.log_softmax(-distances, dim=-1)
+        
+        return {'log_probs': log_probs, 'prototypes': prototypes}
 ```
 
 ### 4.3 Episode采样
 
 ```python
 class EpisodeSampler:
-    """从数据集中采样N-way K-shot episode"""
+    """N-way K-shot Episode 采样器"""
     
-    def __init__(self, n_way=2, k_shot=5, n_query=15):
+    def __init__(self, n_way=2, k_shot=10, n_query=15):
         self.n_way = n_way      # 类别数 (human vs bot)
         self.k_shot = k_shot    # 每类支持样本数
         self.n_query = n_query  # 每类查询样本数
@@ -200,28 +218,102 @@ class EpisodeSampler:
         返回: support_set, query_set
         """
         # 按类别分组
-        human_idx = [i for i in indices if dataset.labels[i] == 0]
-        bot_idx = [i for i in indices if dataset.labels[i] == 1]
+        class_indices = self._group_by_class(dataset, indices)
         
-        # 采样support set
-        support_human = random.sample(human_idx, self.k_shot)
-        support_bot = random.sample(bot_idx, self.k_shot)
+        # 采样support set (每类k_shot个)
+        support_indices = []
+        for c in range(self.n_way):
+            support_indices.extend(random.sample(class_indices[c], self.k_shot))
         
         # 采样query set (不与support重叠)
-        remaining_human = [i for i in human_idx if i not in support_human]
-        remaining_bot = [i for i in bot_idx if i not in support_bot]
-        query_human = random.sample(remaining_human, self.n_query)
-        query_bot = random.sample(remaining_bot, self.n_query)
+        query_indices = []
+        for c in range(self.n_way):
+            remaining = [i for i in class_indices[c] if i not in support_indices]
+            query_indices.extend(random.sample(remaining, self.n_query))
         
-        return (support_human + support_bot, 
-                query_human + query_bot)
+        return self._build_batch(dataset, support_indices, query_indices)
+```
+
+### 4.4 多模态编码器
+
+```python
+class MultiModalEncoder(nn.Module):
+    """支持可配置模态组合的多模态编码器"""
+    
+    def __init__(self, config):
+        # 根据配置初始化各编码器
+        self.enabled_modalities = config.get('enabled_modalities', ['num', 'cat'])
+        
+        if 'num' in self.enabled_modalities:
+            self.numerical_encoder = NumericalEncoder(8, 32, 64)
+        if 'cat' in self.enabled_modalities:
+            self.categorical_encoder = CategoricalEncoder([2,2,2,2,2], 16, 32)
+        if 'text' in self.enabled_modalities:
+            self.text_encoder = TextEncoder('xlm-roberta-base', 256)
+        if 'graph' in self.enabled_modalities:
+            self.graph_encoder = GraphEncoder(256, 128, 128)
+        
+        # 融合模块
+        self.fusion = AttentionFusion(...)
+    
+    def forward(self, batch, texts=None, edge_index=None, **kwargs):
+        embeddings = {}
+        
+        if self.numerical_encoder:
+            embeddings['num'] = self.numerical_encoder(batch['num_features'])
+        if self.categorical_encoder:
+            embeddings['cat'] = self.categorical_encoder(batch['cat_features'])
+        if self.text_encoder and texts:
+            embeddings['text'] = self.text_encoder(texts)
+        if self.graph_encoder and edge_index:
+            embeddings['graph'] = self.graph_encoder(...)
+        
+        return self.fusion(**embeddings)
 ```
 
 ---
 
-## 5. 实验设计
+## 5. 训练流程
 
-### 5.1 实验一：源域内验证
+### 5.1 元训练循环
+
+```python
+class MetaTrainer:
+    def train(self, n_epochs):
+        for epoch in range(n_epochs):
+            # 训练阶段 (100 episodes)
+            train_metrics = self.train_epoch(n_episodes=100)
+            
+            # 验证阶段 (50 episodes)
+            val_metrics = self.validate(n_episodes=50)
+            
+            # 检查改进
+            if val_metrics['loss'] < self.best_val_loss:
+                self.best_val_loss = val_metrics['loss']
+                self.save_checkpoint(is_best=True)
+                self.patience_counter = 0
+            else:
+                self.patience_counter += 1
+            
+            # 早停
+            if self.patience_counter >= self.patience:
+                break
+```
+
+### 5.2 损失函数
+
+```
+Loss = NLLLoss(log_probs, true_labels)
+     = -Σ log P(y_true | query)
+
+目标: 最小化 query 样本到正确原型的距离
+```
+
+---
+
+## 6. 实验设计
+
+### 6.1 实验一：源域内验证
 
 **目的**：验证原型网络在单一数据集上的有效性
 
@@ -231,12 +323,7 @@ class EpisodeSampler:
 - 验证：val split上评估
 - 测试：test split上报告最终结果
 
-**对比基线**：
-- MLP分类器（全量监督）
-- 随机森林（传统ML）
-- 5-shot微调
-
-### 5.2 实验二：跨域迁移（核心实验）
+### 6.2 实验二：跨域迁移（核心实验）
 
 **目的**：验证跨平台少样本适应能力
 
@@ -249,52 +336,46 @@ class EpisodeSampler:
 - Accuracy, Precision, Recall, F1
 - 不同K值下的性能曲线
 
-**对比基线**：
-- 直接迁移（不适应）
-- 微调（用K个样本微调）
-- 从头训练（只用K个样本）
-
-### 5.3 实验三：消融实验
+### 6.3 实验三：消融实验
 
 **目的**：分析各组件贡献
 
-| 实验 | 设置 | 验证问题 |
+| 配置 | 模态 | 验证问题 |
 |------|------|----------|
-| A | 去掉文本特征 | 文本的重要性 |
-| B | 去掉图结构 | 图的重要性 |
-| C | 只用数值特征 | 最小特征集效果 |
-| D | 不同距离度量 | 欧氏 vs 余弦 |
-| E | 不同K-shot | 样本数敏感性 |
+| ablation_num_cat | num + cat | 基线效果 |
+| ablation_num_cat_text | num + cat + text | 文本的贡献 |
+| ablation_all | num + cat + text + graph | 完整模型效果 |
 
 ---
 
-## 6. 实施计划
+## 7. 实施进度
 
-### 第一阶段：数据准备（1周）
+### 第一阶段：数据准备 ✅
 - [x] 统一预处理器实现
 - [x] 流式加载优化
 - [x] 运行预处理，验证输出
 
-### 第二阶段：基础模型（2周）
+### 第二阶段：基础模型 ✅
 - [x] 数值/分类编码器
 - [x] 原型网络核心
 - [x] Episode采样器
-- [ ] 源域内验证实验
+- [x] 元训练器
+- [x] 评估器
 
-### 第三阶段：完整模型（2周）
-- [ ] 文本编码器（XLM-RoBERTa）
-- [ ] 图编码器（GAT）
-- [ ] 多模态融合
-- [ ] 跨域迁移实验
+### 第三阶段：完整模型 ✅
+- [x] 文本编码器（XLM-RoBERTa）
+- [x] 图编码器（GAT）
+- [x] 注意力融合模块
+- [x] 多模态训练支持
 
-### 第四阶段：实验与论文（2周）
-- [ ] 消融实验
+### 第四阶段：实验与论文
+- [ ] 完整消融实验
 - [ ] 结果分析
 - [ ] 论文撰写
 
 ---
 
-## 7. 预期贡献
+## 8. 预期贡献
 
 1. **方法贡献**：首次将原型网络应用于跨平台社交机器人检测
 2. **实验贡献**：建立Twibot-20→Misbot跨域评估基准
@@ -302,32 +383,20 @@ class EpisodeSampler:
 
 ---
 
-## 8. 项目结构
+## 9. 运行命令
 
-```
-CPPNBOT/
-├── dataset/                    # 原始数据
-│   ├── Twibot-20/
-│   └── Misbot/
-│
-├── processed_data/             # 预处理后数据
-│   ├── twibot20/
-│   └── misbot/
-│
-├── src/                        # 源代码
-│   ├── data/
-│   ├── models/
-│   └── training/
-│
-├── experiments/                # 实验脚本
-│   ├── train_source.py        # 源域训练
-│   ├── adapt_target.py        # 目标域适应
-│   └── ablation.py            # 消融实验
-│
-├── configs/                    # 配置文件
-├── results/                    # 实验结果
-│
-├── preprocess_unified.py       # 预处理脚本
-├── DESIGN_DOCUMENT.md          # 本文档（实验设计）
-└── requirements.txt
+```bash
+# 数据预处理
+python preprocess_unified.py --dataset all
+
+# 训练 (源域: Twibot-20)
+python experiments/train_source.py --config configs/default.yaml
+
+# 评估 (目标域: Misbot)
+python experiments/evaluate_target.py --model-path results/{timestamp}/best_model.pt
+
+# 消融实验
+python experiments/train_source.py --config configs/ablation_num_cat.yaml
+python experiments/train_source.py --config configs/ablation_num_cat_text.yaml
+python experiments/train_source.py --config configs/ablation_all.yaml
 ```

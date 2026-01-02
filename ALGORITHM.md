@@ -41,9 +41,11 @@
 ### 3.1 输入特征
 
 ```
-用户特征 (8维)
-├── 数值特征 (5维): followers, following, tweets, favorites, listed
-└── 分类特征 (3维): verified, protected, default_profile
+用户特征
+├── 数值特征 (8维): followers, following, tweets, listed, age, ratio, username_len, desc_len
+├── 分类特征 (5维): verified, protected, default_avatar, has_url, has_location
+├── 文本特征 (可选): description + tweets
+└── 图特征 (可选): 社交网络结构
 ```
 
 ### 3.2 多模态编码器
@@ -53,43 +55,57 @@
 │                    MultiModalEncoder                            │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  数值特征 [batch, 5]                                            │
+│  数值特征 [batch, 8]                                            │
 │       │                                                         │
 │       ▼                                                         │
 │  ┌─────────────────────────────────┐                           │
 │  │     NumericalEncoder            │                           │
-│  │  Linear(5→32) + ReLU            │                           │
+│  │  Linear(8→32) + ReLU            │                           │
 │  │  Linear(32→64) + ReLU           │                           │
 │  │  LayerNorm(64)                  │                           │
 │  └─────────────────┬───────────────┘                           │
 │                    │ [batch, 64]                                │
 │                    │                                            │
-│                    ▼                                            │
-│              ┌───────────┐                                      │
-│              │  Concat   │ ──▶ [batch, 96]                     │
-│              └─────┬─────┘                                      │
-│                    │                                            │
-│                    ▼                                            │
-│  ┌─────────────────────────────────┐                           │
-│  │     FusionModule                │                           │
-│  │  Linear(96→256)                 │                           │
-│  │  Dropout(0.1)                   │                           │
-│  └─────────────────┬───────────────┘                           │
-│                    │ [batch, 256]                               │
-│                    ▼                                            │
-│              用户嵌入向量                                        │
-│                                                                 │
-│  分类特征 [batch, 3]                                            │
+│  分类特征 [batch, 5]                                            │
 │       │                                                         │
 │       ▼                                                         │
 │  ┌─────────────────────────────────┐                           │
 │  │     CategoricalEncoder          │                           │
-│  │  Embedding(2, 16) × 3           │                           │
-│  │  Concat → [batch, 48]           │                           │
-│  │  Linear(48→32)                  │                           │
+│  │  Embedding(2, 16) × 5           │                           │
+│  │  Concat → [batch, 80]           │                           │
+│  │  Linear(80→32)                  │                           │
 │  └─────────────────┬───────────────┘                           │
 │                    │ [batch, 32]                                │
-│                    └──────────────────────▲                     │
+│                    │                                            │
+│  文本 (可选)                                                     │
+│       │                                                         │
+│       ▼                                                         │
+│  ┌─────────────────────────────────┐                           │
+│  │     TextEncoder (XLM-RoBERTa)   │                           │
+│  │  Tokenize → Encode → Pool       │                           │
+│  │  Linear(768→256)                │                           │
+│  └─────────────────┬───────────────┘                           │
+│                    │ [batch, 256]                               │
+│                    │                                            │
+│  图结构 (可选)                                                   │
+│       │                                                         │
+│       ▼                                                         │
+│  ┌─────────────────────────────────┐                           │
+│  │     GraphEncoder (GAT)          │                           │
+│  │  GATConv × 2 layers             │                           │
+│  │  Multi-head attention           │                           │
+│  └─────────────────┬───────────────┘                           │
+│                    │ [batch, 128]                               │
+│                    │                                            │
+│                    ▼                                            │
+│              ┌───────────────┐                                  │
+│              │ AttentionFusion│                                 │
+│              │ 学习模态权重    │                                 │
+│              │ 加权融合        │                                 │
+│              └───────┬───────┘                                  │
+│                      │ [batch, 256]                             │
+│                      ▼                                          │
+│                用户嵌入向量                                      │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -157,6 +173,7 @@
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │                                                         │   │
 │  │  欧氏距离: d(q, p) = ||q - p||²                         │   │
+│  │  余弦距离: d(q, p) = 1 - cos(q, p)                      │   │
 │  │                                                         │   │
 │  │       Query                                             │   │
 │  │         ◇                                               │   │
@@ -228,7 +245,7 @@
 │      │                                                          │
 │      └──▶ 早停检查                                              │
 │           ┌─────────────────────────────────────────────────┐  │
-│           │  if patience_counter >= 30:                     │  │
+│           │  if patience_counter >= 10:                     │  │
 │           │      break  ← 停止训练                          │  │
 │           └─────────────────────────────────────────────────┘  │
 │                                                                 │
@@ -243,6 +260,12 @@ Loss = NLLLoss(log_probs, true_labels)
 
 目标: 最小化 query 样本到正确原型的距离
 ```
+
+### 5.3 多模态训练特性
+
+- **分离学习率**: 文本编码器使用更小的学习率 (1e-5 vs 1e-3)
+- **骨干冻结**: 可选择冻结 XLM-RoBERTa 骨干网络
+- **注意力融合**: 自动学习各模态的重要性权重
 
 ---
 
@@ -332,14 +355,39 @@ Loss = NLLLoss(log_probs, true_labels)
 ```yaml
 # 模型架构
 model:
-  num_input_dim: 5        # 数值特征维度
+  # 数值编码器
+  num_input_dim: 8        # 数值特征维度
   num_hidden_dim: 32      # 数值编码器隐藏层
   num_output_dim: 64      # 数值编码器输出
-  cat_num_categories: [2, 2, 2]  # 分类特征类别数
+  
+  # 分类编码器
+  cat_num_categories: [2, 2, 2, 2, 2]  # 分类特征类别数
   cat_embedding_dim: 16   # 分类嵌入维度
   cat_output_dim: 32      # 分类编码器输出
+  
+  # 文本编码器 (可选)
+  text_model_name: xlm-roberta-base
+  text_output_dim: 256
+  text_max_length: 512
+  text_freeze_backbone: true
+  
+  # 图编码器 (可选)
+  graph_input_dim: 256
+  graph_hidden_dim: 128
+  graph_output_dim: 128
+  graph_num_heads: 4
+  graph_num_layers: 2
+  
+  # 融合模块
   fusion_output_dim: 256  # 最终嵌入维度
-  distance_metric: euclidean  # 距离度量
+  fusion_dropout: 0.1
+  fusion_use_attention: true
+  
+  # 启用的模态
+  enabled_modalities: ['num', 'cat']  # 可选: 'text', 'graph'
+  
+  # 距离度量
+  distance_metric: euclidean  # 或 'cosine'
 
 # 训练配置
 training:
@@ -350,7 +398,9 @@ training:
   n_episodes_val: 50     # 每epoch验证episodes
   n_epochs: 200     # 最大训练轮数
   learning_rate: 0.001
-  patience: 30      # 早停耐心值
+  text_learning_rate: 0.00001  # 文本编码器学习率
+  weight_decay: 0.0001
+  patience: 10      # 早停耐心值
 ```
 
 ---
@@ -358,11 +408,19 @@ training:
 ## 8. 运行命令
 
 ```bash
+# 数据预处理
+python preprocess_unified.py --dataset all
+
 # 训练 (源域: Twibot-20)
-python experiments/train_source.py --epochs 200
+python experiments/train_source.py --config configs/default.yaml
 
 # 评估 (目标域: Misbot)
-python experiments/evaluate_target.py --model results/{timestamp}/best_model.pt
+python experiments/evaluate_target.py --model-path results/{timestamp}/best_model.pt
+
+# 消融实验
+python experiments/train_source.py --config configs/ablation_num_cat.yaml
+python experiments/train_source.py --config configs/ablation_num_cat_text.yaml
+python experiments/train_source.py --config configs/ablation_all.yaml
 ```
 
 ---
